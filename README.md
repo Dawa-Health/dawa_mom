@@ -1,5 +1,7 @@
 # DawaMom
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+
 DawaMom is a Flutter maternal health companion app. It supports patient onboarding, appointment views, pregnancy-week guidance, period tracking, and Rudo chat through Supabase-backed data and Edge Functions.
 
 The active app runtime is Supabase-backed. Firebase project files, Firebase Gradle plugins, Firebase iOS pods, and Firebase platform config files are not used by the Flutter app.
@@ -26,6 +28,14 @@ flutter pub get
 flutter analyze --no-pub
 flutter test --no-pub
 ```
+
+To measure test coverage:
+
+```powershell
+flutter test --no-pub --coverage
+```
+
+This writes a line-level report to `coverage/lcov.info`.
 
 ## Web Preview
 
@@ -95,3 +105,31 @@ After applying migrations, run `supabase/POST_MIGRATION_VERIFY.sql` and the tran
 supabase secrets set GEMINI_API_KEY="<gemini-api-key>" --project-ref himbfndvsuwiudtzjojh
 supabase functions deploy rudo-chat --project-ref himbfndvsuwiudtzjojh
 ```
+
+## License
+
+DawaMom is free software released under the
+[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0). You may use,
+study, modify, and share it under the terms of that license.
+
+In particular, if you run a modified version of DawaMom as a network service,
+you must make the corresponding source code of your modified version available
+to the users of that service, under the same license.
+
+Copyright (C) 2026 Dawa Health.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+DawaMom is not a medical device and does not replace professional medical
+advice, diagnosis, or treatment.
+
+Third-party dependencies keep their own licenses. Datasets released by Dawa
+Health are licensed separately (see the dataset cards), and the Rudo and model
+weights have their own license terms where stated.
+
+## Contributing
+
+By contributing to this repository, you agree that your contributions will be
+licensed under the AGPL-3.0, the same license as the project.
