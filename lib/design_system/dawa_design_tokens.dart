@@ -63,13 +63,16 @@ abstract final class DawaSpacing {
 
 abstract final class DawaLayout {
   /// Height reserved for the five-destination mobile navigation surface.
-  static const mobileNavigationHeight = 72.0;
+  static const mobileNavigationHeight = 64.0;
 
-  /// Decorative space above mobile navigation for the wave and Rudo launcher.
+  /// Space above mobile navigation reserved for the small Rudo launcher.
   ///
   /// The responsive shell owns this area. Individual pages must not reserve or
   /// repaint it, otherwise a second footer appears when content is scrolled.
-  static const mobileNavigationWaveClearance = 46.0;
+  static const mobileNavigationWaveClearance = 42.0;
+
+  /// Outer gap between the floating navigation surface and the safe area.
+  static const mobileNavigationBottomMargin = 12.0;
 
   /// Breathing room between the final interactive element and navigation.
   static const bottomContentGap = 32.0;
@@ -112,22 +115,17 @@ abstract final class DawaBreakpoints {
 abstract final class DawaShadows {
   static const card = <BoxShadow>[
     BoxShadow(
-      color: Color(0x160C2878),
-      blurRadius: 24,
-      offset: Offset(0, 9),
-    ),
-    BoxShadow(
-      color: Color(0x0AFFFFFF),
-      blurRadius: 2,
-      offset: Offset(0, -1),
+      color: Color(0x0D0C2878),
+      blurRadius: 12,
+      offset: Offset(0, 4),
     ),
   ];
 
   static const floating = <BoxShadow>[
     BoxShadow(
-      color: Color(0x220C2878),
-      blurRadius: 30,
-      offset: Offset(0, 14),
+      color: Color(0x180C2878),
+      blurRadius: 24,
+      offset: Offset(0, 10),
     ),
   ];
 }
@@ -210,6 +208,39 @@ abstract final class DawaTheme {
         backgroundColor: DawaColors.canvas,
         modalBackgroundColor: DawaColors.canvas,
         showDragHandle: false,
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: DawaColors.warmSurface,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        insetPadding: const EdgeInsets.symmetric(
+          horizontal: DawaSpacing.md,
+          vertical: DawaSpacing.xl,
+        ),
+        titleTextStyle: const TextStyle(
+          fontFamily: 'Poppins',
+          color: DawaColors.primaryDark,
+          fontSize: 20,
+          height: 1.25,
+          fontWeight: FontWeight.w600,
+        ),
+        contentTextStyle: const TextStyle(
+          fontFamily: 'Poppins',
+          color: DawaColors.ink,
+          fontSize: 14,
+          height: 1.45,
+          fontWeight: FontWeight.w400,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(DawaRadii.large),
+          side: const BorderSide(color: DawaColors.line),
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(
+          DawaSpacing.lg,
+          0,
+          DawaSpacing.lg,
+          DawaSpacing.lg,
+        ),
       ),
       snackBarTheme: SnackBarThemeData(
         backgroundColor: DawaColors.ink,

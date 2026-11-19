@@ -6,13 +6,15 @@ import 'package:dawa_mom/features/appointments/domain/appointment.dart';
 import 'package:dawa_mom/features/appointments/presentation/dawa_appointment_reminder_sheet.dart';
 import 'package:dawa_mom/features/appointments/presentation/dawa_booking_success_dialog.dart';
 import 'package:dawa_mom/features/appointments/presentation/dawa_care_page.dart';
+import 'package:dawa_mom/features/auth/dawa_auth_pages.dart';
 import 'package:dawa_mom/features/games/presentation/dawa_games_pages.dart';
 import 'package:dawa_mom/features/learning/data/dawa_learning_repository.dart';
 import 'package:dawa_mom/features/learning/presentation/dawa_learn_page.dart';
 import 'package:dawa_mom/features/learning/presentation/dawa_learning_detail_pages.dart';
 import 'package:dawa_mom/features/learning/presentation/dawa_quest_pages.dart';
 import 'package:dawa_mom/features/notifications/dawa_notifications_page.dart';
-import 'package:dawa_mom/features/period_tracker/presentation/dawa_cycle_tracker_page.dart';
+import 'package:dawa_mom/features/onboarding/dawa_onboarding_page.dart';
+import 'package:dawa_mom/features/period_tracker/presentation/dawa_daily_check_in_sheet.dart';
 import 'package:dawa_mom/features/profile/data/health_profile_repository.dart';
 import 'package:dawa_mom/features/rewards/presentation/dawa_rewards_page.dart';
 import 'package:dawa_mom/features/settings/dawa_mom_settings_page.dart';
@@ -24,9 +26,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 const _requiredSizes = <Size>[
+  Size(320, 568),
   Size(360, 800),
   Size(390, 844),
+  Size(400, 793),
   Size(412, 915),
+  Size(430, 932),
   Size(768, 1024),
 ];
 
@@ -238,6 +243,55 @@ void main() {
     }
   });
 
+  testWidgets('auth and onboarding surfaces render at every required size',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    for (final size in _requiredSizes) {
+      tester.view.physicalSize = size;
+      final pages = <Widget>[
+        const DawaWelcomePage(),
+        const DawaLoginPage(),
+        const DawaRegistrationPage(),
+        const DawaPasswordRecoveryPage(),
+        const DawaOnboardingPage(),
+      ];
+      for (final page in pages) {
+        await _pump(tester, page);
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: '${page.runtimeType} failed at $size',
+        );
+        await tester.pumpWidget(const SizedBox());
+      }
+    }
+  });
+
+  testWidgets('auth forms stay usable with larger text and the keyboard',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 568);
+    addTearDown(tester.view.reset);
+
+    await _pump(tester, const DawaLoginPage(), textScale: 1.3);
+    await tester.tap(find.byKey(const ValueKey('dawa-login-identifier')));
+    await tester.showKeyboard(
+      find.byKey(const ValueKey('dawa-login-identifier')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Log in'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await _pump(tester, const DawaRegistrationPage(), textScale: 1.3);
+    await tester.ensureVisible(find.text('Create account').last);
+    await tester.pumpAndSettle();
+    final failure = tester.takeException();
+    if (failure != null) _debugOverflowingFlexes(tester);
+    expect(failure, isNull);
+  });
+
   testWidgets('care and check-in overlays remain usable at every required size',
       (tester) async {
     tester.view.devicePixelRatio = 1;
@@ -305,21 +359,30 @@ void main() {
         isNull,
         reason: 'Booking confirmation failed at $size',
       );
+      await tester.ensureVisible(find.text('Done for now'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Done for now'));
       await tester.pumpAndSettle();
 
+      await tester.ensureVisible(find.text('Open reminder'));
       await tester.tap(find.text('Open reminder'));
       await tester.pumpAndSettle();
       expect(find.text('Save reminder'), findsOneWidget);
       expect(find.text('Cancel'), findsOneWidget);
       expect(
+        find.byKey(const ValueKey('appointment-reminder-when-on-day')),
+        findsOneWidget,
+      );
+      expect(
         tester.takeException(),
         isNull,
         reason: 'Appointment reminder failed at $size',
       );
+      await tester.ensureVisible(find.text('Cancel'));
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
 
+      await tester.ensureVisible(find.text('Open check-in'));
       await tester.tap(find.text('Open check-in'));
       await tester.pumpAndSettle();
       expect(find.text('Save log'), findsOneWidget);
@@ -329,6 +392,7 @@ void main() {
         isNull,
         reason: 'Daily check-in failed at $size',
       );
+      await tester.ensureVisible(find.text('Cancel'));
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
@@ -423,6 +487,25 @@ Appointment _appointment() => Appointment(
     );
 
 class _FakeHealthProfileRepository implements HealthProfileRepository {
+  @override
+  Future<HealthProfilePersonalSave> savePersonalInformation({
+    required String name,
+    required DateTime dateOfBirth,
+    required String phone,
+    required String address,
+    String? occupation,
+  }) async =>
+      HealthProfilePersonalSave(
+        profile: {'display_name': name, 'phone_number': phone},
+        mother: {
+          'name': name,
+          'phone_number': phone,
+          'date_of_birth': dateOfBirth.toIso8601String(),
+          'address': address,
+          'occupation': occupation,
+        },
+      );
+
   @override
   Future<HealthProfileSnapshot> load() async => const HealthProfileSnapshot(
         profile: {

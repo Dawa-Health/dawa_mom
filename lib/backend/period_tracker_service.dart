@@ -97,21 +97,61 @@ class PeriodTrackerService {
     final start = _dateOnly(startDate);
     final end = endDate == null ? null : _dateOnly(endDate);
     validatePeriodRecord(startDate: start, endDate: end);
-    await _validatePeriodOverlap(
-      startDate: start,
-      endDate: end,
-      replacingStartDate: replacingStartDate,
-    );
-    await SupabaseDatabase.instance.runWithFreshSession(
-      () => _client.from('period_tracker_entries').upsert({
-        'profile_id': profileId,
-        'entry_date': formatDateId(start),
-        'is_period_start': true,
-        'period_end_date': end == null ? null : formatDateId(end),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }, onConflict: 'profile_id,entry_date'),
-    );
-    await _syncLatestPeriodStart();
+    try {
+      await _validatePeriodOverlap(
+        startDate: start,
+        endDate: end,
+        replacingStartDate: replacingStartDate,
+      );
+    } on PeriodTrackerException {
+      rethrow;
+    } catch (error, stackTrace) {
+      throw _persistenceFailure(
+        operation: 'save_period_record',
+        stage: 'preflight_read',
+        writeConfirmed: false,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    try {
+      // Selecting the row in the same request confirms that the upsert made it
+      // through PostgREST and RLS before the UI can report success.
+      await SupabaseDatabase.instance.runWithFreshSession(
+        () => _client
+            .from('period_tracker_entries')
+            .upsert({
+              'profile_id': profileId,
+              'entry_date': formatDateId(start),
+              'is_period_start': true,
+              'period_end_date': end == null ? null : formatDateId(end),
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            }, onConflict: 'profile_id,entry_date')
+            .select('entry_date,period_end_date')
+            .single(),
+      );
+    } catch (error, stackTrace) {
+      throw _persistenceFailure(
+        operation: 'save_period_record',
+        stage: 'entry_upsert',
+        writeConfirmed: false,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    try {
+      await _syncLatestPeriodStart();
+    } catch (error, stackTrace) {
+      throw _persistenceFailure(
+        operation: 'save_period_record',
+        stage: 'settings_sync',
+        writeConfirmed: true,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
     notifyChanged();
   }
 
@@ -217,6 +257,55 @@ class PeriodTrackerService {
           .update({'last_period_start': latest}).eq('profile_id', profileId),
     );
   }
+
+  PeriodTrackerPersistenceException _persistenceFailure({
+    required String operation,
+    required String stage,
+    required bool writeConfirmed,
+    required Object error,
+    required StackTrace stackTrace,
+  }) {
+    final code = switch (error) {
+      PostgrestException() => error.code,
+      AuthException() => error.statusCode?.toString(),
+      _ => null,
+    };
+    final postgrestMetadata = error is PostgrestException
+        ? ' details=${error.details == null ? 'none' : 'present'}'
+            ' hint=${error.hint == null ? 'none' : 'present'}'
+        : '';
+    debugPrint(
+      '[PeriodTracker] operation=$operation repository=PeriodTrackerService '
+      'stage=$stage write_confirmed=$writeConfirmed '
+      'error_type=${error.runtimeType} code=${code ?? 'none'}$postgrestMetadata',
+    );
+    debugPrintStack(
+      label: '[PeriodTracker] $operation/$stage',
+      stackTrace: stackTrace,
+      maxFrames: 8,
+    );
+    return PeriodTrackerPersistenceException(
+      operation: operation,
+      stage: stage,
+      writeConfirmed: writeConfirmed,
+      code: code,
+      message: writeConfirmed
+          ? 'Your period was saved, but your cycle summary could not be updated yet.'
+          : _safePersistenceMessage(code),
+    );
+  }
+
+  String _safePersistenceMessage(String? code) => switch (code) {
+        '42501' =>
+          'Your signed-in account does not have permission to save period tracking data.',
+        'PGRST301' ||
+        'PGRST303' =>
+          'Your session has expired. Please sign in again and try once more.',
+        'PGRST205' ||
+        '42P01' =>
+          'Period tracking is temporarily unavailable. Please try again later.',
+        _ => 'Your period could not be saved. Please try again.',
+      };
 
   Future<void> _validatePeriodOverlap({
     required DateTime startDate,
@@ -469,4 +558,22 @@ class PeriodTrackerException implements Exception {
 
   @override
   String toString() => message;
+}
+
+/// A period entry write may complete before a follow-up settings sync fails.
+/// Keeping that state explicit stops callers from misreporting a persisted
+/// record as a failed save.
+class PeriodTrackerPersistenceException extends PeriodTrackerException {
+  const PeriodTrackerPersistenceException({
+    required String message,
+    required this.operation,
+    required this.stage,
+    required this.writeConfirmed,
+    this.code,
+  }) : super(message);
+
+  final String operation;
+  final String stage;
+  final bool writeConfirmed;
+  final String? code;
 }

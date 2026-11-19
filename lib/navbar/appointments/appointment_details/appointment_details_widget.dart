@@ -8,9 +8,11 @@ import '/features/appointments/domain/appointment.dart';
 import '/features/appointments/domain/appointment_result_summary.dart';
 import '/features/appointments/presentation/dawa_appointment_reminder_sheet.dart';
 import '/features/appointments/presentation/appointment_result_summary_view.dart';
+import '/features/payments/data/lipila_payment_repository.dart';
 import '/design_system/dawa_components.dart';
 import '/design_system/dawa_contextual_image.dart';
 import '/design_system/dawa_design_tokens.dart';
+import '/design_system/dawa_interactions.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 
 class AppointmentDetailsWidget extends StatefulWidget {
@@ -35,8 +37,13 @@ class _AppointmentDetailsWidgetState extends State<AppointmentDetailsWidget> {
   final _repository = AppointmentRepository();
   late Future<Appointment?> _appointment;
   late Future<AppointmentResultSummary?> _resultSummary;
+  late Future<LipilaPaymentRecord?> _payment;
   bool _cancelling = false;
+  bool _cancelledLocally = false;
+  bool _retryingPayment = false;
   String? _error;
+  String? _paymentNotice;
+  DawaFeedbackTone _paymentNoticeTone = DawaFeedbackTone.information;
 
   @override
   void initState() {
@@ -44,6 +51,7 @@ class _AppointmentDetailsWidgetState extends State<AppointmentDetailsWidget> {
     AppointmentRepository.changes.addListener(_onAppointmentChanged);
     _appointment = _load();
     _resultSummary = _loadResultSummary();
+    _payment = _loadPayment();
   }
 
   @override
@@ -53,7 +61,9 @@ class _AppointmentDetailsWidgetState extends State<AppointmentDetailsWidget> {
   }
 
   void _onAppointmentChanged() {
-    if (mounted) _refresh();
+    if (mounted && !_cancelledLocally) {
+      _refresh();
+    }
   }
 
   Future<Appointment?> _load() {
@@ -71,12 +81,136 @@ class _AppointmentDetailsWidgetState extends State<AppointmentDetailsWidget> {
   Future<void> _refresh() async {
     final future = _load();
     final resultFuture = _loadResultSummary();
+    final paymentFuture = _loadPayment();
     setState(() {
       _appointment = future;
       _resultSummary = resultFuture;
+      _payment = paymentFuture;
       _error = null;
     });
-    await Future.wait([future, resultFuture]);
+    await Future.wait([future, resultFuture, paymentFuture]);
+  }
+
+  Future<LipilaPaymentRecord?> _loadPayment() {
+    final id = widget.appointmentId ?? widget.encounterDets?.id;
+    return id == null
+        ? Future.value()
+        : LipilaPaymentRepository().getAppointmentPayment(id);
+  }
+
+  Future<void> _refreshPayment() async {
+    try {
+      // A provider callback can change both the payment ledger and the
+      // appointment's server-owned payment state. Reload both so a successful
+      // payment becomes visible without restarting the app.
+      await _refresh();
+      if (mounted) setState(() => _paymentNotice = null);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _paymentNotice =
+              'We could not check your payment status. Your appointment details are still here.';
+          _paymentNoticeTone = DawaFeedbackTone.error;
+        });
+      }
+    }
+  }
+
+  Future<String?> _requestPaymentPhone(Appointment appointment) async {
+    final controller = TextEditingController();
+    final value = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Mobile Money'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${appointment.currencySnapshot} ${appointment.priceSnapshot.toStringAsFixed(2)}',
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                color: DawaColors.primary,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              "We'll send a payment request to your phone. Dawa will never ask for your Mobile Money PIN.",
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.phone,
+              decoration: InputDecoration(
+                labelText: 'Phone number',
+                hintText: '0970 000 000',
+                helperText: "You'll approve the payment on your phone.",
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: const Text('Send payment request'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    final trimmed = value?.trim();
+    return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
+  Future<void> _retryPayment(Appointment appointment) async {
+    if (_retryingPayment) return;
+    final phoneNumber = await _requestPaymentPhone(appointment);
+    if (phoneNumber == null || !mounted) return;
+    setState(() {
+      _retryingPayment = true;
+      _paymentNotice = null;
+    });
+    try {
+      await LipilaPaymentRepository().createPayment(
+        appointmentId: appointment.id,
+        phoneNumber: phoneNumber,
+      );
+      if (!mounted) return;
+      final paymentFuture = _loadPayment();
+      setState(() {
+        _payment = paymentFuture;
+        _paymentNotice =
+            'Payment request sent. Approve it on your phone, then check the payment status.';
+        _paymentNoticeTone = DawaFeedbackTone.pending;
+      });
+    } on FormatException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _paymentNotice = error.message;
+        _paymentNoticeTone = DawaFeedbackTone.error;
+      });
+    } on StateError catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _paymentNotice = error.message;
+        _paymentNoticeTone = DawaFeedbackTone.error;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _paymentNotice =
+            'We could not send a payment request. Please check your connection and try again.';
+        _paymentNoticeTone = DawaFeedbackTone.error;
+      });
+    } finally {
+      if (mounted) setState(() => _retryingPayment = false);
+    }
   }
 
   Future<void> _cancel(Appointment appointment) async {
@@ -103,6 +237,7 @@ class _AppointmentDetailsWidgetState extends State<AppointmentDetailsWidget> {
 
     setState(() {
       _cancelling = true;
+      _cancelledLocally = true;
       _error = null;
     });
     try {
@@ -119,12 +254,14 @@ class _AppointmentDetailsWidgetState extends State<AppointmentDetailsWidget> {
       if (!mounted) return;
       setState(() {
         _cancelling = false;
+        _cancelledLocally = false;
         _error = error.message;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _cancelling = false;
+        _cancelledLocally = false;
         _error = 'The appointment could not be cancelled. Please try again.';
       });
     }
@@ -177,16 +314,26 @@ class _AppointmentDetailsWidgetState extends State<AppointmentDetailsWidget> {
                   return FutureBuilder<AppointmentResultSummary?>(
                     future: _resultSummary,
                     builder: (context, resultSnapshot) =>
-                        AppointmentDetailsContent(
-                      appointment: appointment,
-                      resultSummary: resultSnapshot.data,
-                      resultLoading: resultSnapshot.connectionState ==
-                          ConnectionState.waiting,
-                      resultError: resultSnapshot.hasError,
-                      error: _error,
-                      cancelling: _cancelling,
-                      onCancel: () => _cancel(appointment),
-                      onRefresh: _refresh,
+                        FutureBuilder<LipilaPaymentRecord?>(
+                      future: _payment,
+                      builder: (context, paymentSnapshot) =>
+                          AppointmentDetailsContent(
+                        appointment: appointment,
+                        payment: paymentSnapshot.data,
+                        resultSummary: resultSnapshot.data,
+                        resultLoading: resultSnapshot.connectionState ==
+                            ConnectionState.waiting,
+                        resultError: resultSnapshot.hasError,
+                        error: _error,
+                        cancelling: _cancelling,
+                        retryingPayment: _retryingPayment,
+                        paymentNotice: _paymentNotice,
+                        onCancel: () => _cancel(appointment),
+                        onRefresh: _refresh,
+                        onRefreshPayment: _refreshPayment,
+                        onRetryPayment: () => _retryPayment(appointment),
+                        paymentNoticeTone: _paymentNoticeTone,
+                      ),
                     ),
                   );
                 },
@@ -209,8 +356,14 @@ class AppointmentDetailsContent extends StatelessWidget {
     required this.onRefresh,
     required this.resultLoading,
     required this.resultError,
+    this.retryingPayment = false,
     this.resultSummary,
     this.error,
+    this.payment,
+    this.paymentNotice,
+    this.paymentNoticeTone = DawaFeedbackTone.information,
+    this.onRefreshPayment,
+    this.onRetryPayment,
   });
 
   final Appointment appointment;
@@ -220,7 +373,13 @@ class AppointmentDetailsContent extends StatelessWidget {
   final AppointmentResultSummary? resultSummary;
   final bool resultLoading;
   final bool resultError;
+  final bool retryingPayment;
   final String? error;
+  final LipilaPaymentRecord? payment;
+  final String? paymentNotice;
+  final DawaFeedbackTone paymentNoticeTone;
+  final VoidCallback? onRefreshPayment;
+  final VoidCallback? onRetryPayment;
 
   @override
   Widget build(BuildContext context) {
@@ -234,10 +393,13 @@ class AppointmentDetailsContent extends StatelessWidget {
       appointment.endTime,
     );
     final isCompleted = appointment.status == 'completed';
+    final isCancelled = appointment.status == 'cancelled';
+    final paymentSucceeded = payment?.status == 'successful';
     final statusMessage = appointment.patientSafeStatusMessage
-                ?.trim()
-                .isNotEmpty ==
-            true
+                    ?.trim()
+                    .isNotEmpty ==
+                true &&
+            !paymentSucceeded
         ? appointment.patientSafeStatusMessage!.trim()
         : appointment.integrationStatus == 'failed'
             ? 'Your appointment is saved, but the clinic connection needs attention. It will be retried safely.'
@@ -281,7 +443,11 @@ class AppointmentDetailsContent extends StatelessWidget {
                     onRefresh: onRefresh,
                   ),
                 const SizedBox(height: 26),
-              ] else ...[
+              ] else if (isCancelled &&
+                  appointment.integrationStatus != 'synced') ...[
+                _CancellationSyncNotice(appointment: appointment),
+                const SizedBox(height: 26),
+              ] else if (!isCancelled) ...[
                 _StatusNotice(
                   appointment: appointment,
                   message: statusMessage,
@@ -295,6 +461,45 @@ class AppointmentDetailsContent extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               _VisitInformation(appointment: appointment),
+              if (paymentNotice != null) ...[
+                const SizedBox(height: 16),
+                DawaActionFeedback(
+                  title: paymentNoticeTone == DawaFeedbackTone.error
+                      ? 'Payment status could not be updated'
+                      : paymentNoticeTone == DawaFeedbackTone.pending
+                          ? 'Payment request sent'
+                          : 'Payment update',
+                  message: paymentNotice!,
+                  tone: paymentNoticeTone,
+                  actionLabel: paymentNoticeTone == DawaFeedbackTone.pending
+                      ? 'Check again'
+                      : null,
+                  onAction: paymentNoticeTone == DawaFeedbackTone.pending
+                      ? onRefreshPayment
+                      : null,
+                ),
+              ],
+              if (payment != null) ...[
+                const SizedBox(height: 16),
+                _PaymentHistoryCard(
+                  payment: payment!,
+                  appointment: appointment,
+                  retrying: retryingPayment,
+                  onRefresh: onRefreshPayment,
+                  onRetry: onRetryPayment,
+                ),
+              ] else if (appointment.paymentMethod == 'cash') ...[
+                const SizedBox(height: 16),
+                const _PayAtClinicCard(),
+              ] else if (appointment.isPaidSnapshot &&
+                  appointment.paymentMethod == 'online' &&
+                  !_appointmentIsTerminal(appointment.status)) ...[
+                const SizedBox(height: 16),
+                _PaymentNeededCard(
+                  onStartPayment: onRetryPayment,
+                  busy: retryingPayment,
+                ),
+              ],
               if (appointment.isUpcoming) ...[
                 const SizedBox(height: 16),
                 const _AppointmentPreparationCard(),
@@ -371,6 +576,218 @@ class AppointmentDetailsContent extends StatelessWidget {
   static String _statusLabel(String status) => status.isEmpty
       ? 'Pending'
       : '${status[0].toUpperCase()}${status.substring(1)}';
+}
+
+class _PaymentHistoryCard extends StatelessWidget {
+  const _PaymentHistoryCard({
+    required this.payment,
+    required this.appointment,
+    required this.retrying,
+    this.onRefresh,
+    this.onRetry,
+  });
+
+  final LipilaPaymentRecord payment;
+  final Appointment appointment;
+  final bool retrying;
+  final VoidCallback? onRefresh;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final presentation = _paymentPresentation(payment.status);
+    final date =
+        DateFormat('d MMM yyyy, HH:mm').format(payment.createdAt.toLocal());
+    final canRetry = presentation.isTerminal &&
+        !_appointmentIsTerminal(appointment.status) &&
+        onRetry != null;
+    return DawaCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Payment', style: context.dawaSectionTitle),
+          const SizedBox(height: 10),
+          Text(
+            '${payment.currency} ${payment.amount.toStringAsFixed(2)}',
+            style: context.dawaSectionTitle,
+          ),
+          const SizedBox(height: 8),
+          DawaStatusTransition(
+            label: presentation.label,
+            icon: presentation.icon,
+            color: presentation.color,
+          ),
+          const SizedBox(height: 10),
+          DawaActionFeedback(
+            title: presentation.title,
+            message: presentation.message,
+            tone: presentation.tone,
+            actionLabel: presentation.isPending && onRefresh != null
+                ? 'Check again'
+                : canRetry
+                    ? 'Try payment again'
+                    : null,
+            onAction: presentation.isPending && onRefresh != null
+                ? onRefresh
+                : canRetry
+                    ? onRetry
+                    : null,
+          ),
+          const SizedBox(height: 10),
+          Text(date, style: context.dawaCaption),
+          const SizedBox(height: 4),
+          Text(
+            '${payment.paymentMethod.replaceAll('_', ' ')} via ${payment.provider}',
+            style: context.dawaCaption,
+          ),
+          if (payment.referenceId.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text('Reference: ${payment.referenceId}',
+                style: context.dawaCaption),
+          ],
+          if (retrying) ...[
+            const SizedBox(height: 10),
+            const LinearProgressIndicator(minHeight: 3),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PaymentNeededCard extends StatelessWidget {
+  const _PaymentNeededCard({
+    required this.onStartPayment,
+    required this.busy,
+  });
+
+  final VoidCallback? onStartPayment;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) => DawaCard(
+        color: DawaColors.softBlue,
+        borderColor: DawaColors.primary.withValues(alpha: .2),
+        child: DawaActionFeedback(
+          title: 'Payment needed',
+          message:
+              'Payment has not started yet. Start a Mobile Money payment before the clinic can review this appointment request.',
+          tone: DawaFeedbackTone.pending,
+          actionLabel: onStartPayment == null
+              ? null
+              : busy
+                  ? 'Sending request…'
+                  : 'Start payment',
+          onAction: busy ? null : onStartPayment,
+        ),
+      );
+}
+
+class _PaymentPresentation {
+  const _PaymentPresentation({
+    required this.label,
+    required this.title,
+    required this.message,
+    required this.icon,
+    required this.color,
+    required this.tone,
+    this.isPending = false,
+    this.isTerminal = false,
+  });
+
+  final String label;
+  final String title;
+  final String message;
+  final IconData icon;
+  final Color color;
+  final DawaFeedbackTone tone;
+  final bool isPending;
+  final bool isTerminal;
+}
+
+_PaymentPresentation _paymentPresentation(String status) => switch (status) {
+      'successful' => const _PaymentPresentation(
+          label: 'Payment confirmed',
+          title: 'Payment confirmed',
+          message:
+              'Your payment has been confirmed. Check your appointment status for clinic updates.',
+          icon: Icons.check_circle_outline_rounded,
+          color: DawaColors.greenDark,
+          tone: DawaFeedbackTone.success,
+        ),
+      'pending' || 'created' => const _PaymentPresentation(
+          label: 'Payment pending',
+          title: 'Waiting for payment',
+          message:
+              'Approve the Mobile Money request on your phone. We will update this page when payment is confirmed.',
+          icon: Icons.schedule_rounded,
+          color: DawaColors.primary,
+          tone: DawaFeedbackTone.pending,
+          isPending: true,
+        ),
+      'failed' => const _PaymentPresentation(
+          label: 'Payment failed',
+          title: "Payment wasn't completed",
+          message:
+              'No money was confirmed as received. You can try again if this appointment is still available.',
+          icon: Icons.error_outline_rounded,
+          color: DawaColors.danger,
+          tone: DawaFeedbackTone.error,
+          isTerminal: true,
+        ),
+      'cancelled' => const _PaymentPresentation(
+          label: 'Payment cancelled',
+          title: 'Payment was cancelled',
+          message:
+              'No money was confirmed as received. You can try again if this appointment is still available.',
+          icon: Icons.cancel_outlined,
+          color: DawaColors.danger,
+          tone: DawaFeedbackTone.error,
+          isTerminal: true,
+        ),
+      'expired' => const _PaymentPresentation(
+          label: 'Payment expired',
+          title: 'Payment request expired',
+          message:
+              'No money was confirmed as received. You can try again if this appointment is still available.',
+          icon: Icons.timer_off_outlined,
+          color: DawaColors.danger,
+          tone: DawaFeedbackTone.error,
+          isTerminal: true,
+        ),
+      _ => _PaymentPresentation(
+          label: status.isEmpty ? 'Payment status unavailable' : status,
+          title: 'Payment status unavailable',
+          message:
+              'We could not read the payment status. Check again when you have a connection.',
+          icon: Icons.sync_problem_rounded,
+          color: DawaColors.warning,
+          tone: DawaFeedbackTone.error,
+        ),
+    };
+
+bool _appointmentIsTerminal(String status) =>
+    const {'cancelled', 'declined', 'completed', 'missed'}.contains(status);
+
+class _PayAtClinicCard extends StatelessWidget {
+  const _PayAtClinicCard();
+
+  @override
+  Widget build(BuildContext context) => DawaCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Payment', style: context.dawaSectionTitle),
+            const SizedBox(height: 8),
+            Text('Pay at clinic', style: context.dawaSectionTitle),
+            const SizedBox(height: 4),
+            Text(
+              'Payment is due in cash when you arrive for your appointment.',
+              style: context.dawaCaption,
+            ),
+          ],
+        ),
+      );
 }
 
 class _AppointmentPreparationCard extends StatelessWidget {
@@ -558,12 +975,16 @@ class _HeroStatusBadge extends StatelessWidget {
         children: [
           Icon(status.icon, color: Colors.white, size: 15),
           const SizedBox(width: 5),
-          Text(
-            status.label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
+          Flexible(
+            child: Text(
+              status.label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
         ],
@@ -890,12 +1311,10 @@ class _StatusNotice extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  status.label,
-                  style: theme.titleSmall.copyWith(
-                    color: status.foreground,
-                    fontWeight: FontWeight.w800,
-                  ),
+                DawaStatusTransition(
+                  label: status.label,
+                  icon: status.icon,
+                  color: status.foreground,
                 ),
                 const SizedBox(height: 3),
                 Text(
@@ -910,6 +1329,26 @@ class _StatusNotice extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CancellationSyncNotice extends StatelessWidget {
+  const _CancellationSyncNotice({required this.appointment});
+
+  final Appointment appointment;
+
+  @override
+  Widget build(BuildContext context) {
+    final failed = appointment.integrationStatus == 'failed';
+    return DawaActionFeedback(
+      title: failed
+          ? 'Cancellation has not reached the clinic'
+          : 'Cancellation pending sync',
+      message: failed
+          ? 'Contact the clinic if you need immediate confirmation.'
+          : "We'll update the clinic when you're connected.",
+      tone: failed ? DawaFeedbackTone.error : DawaFeedbackTone.pending,
     );
   }
 }

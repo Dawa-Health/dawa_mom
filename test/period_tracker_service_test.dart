@@ -9,6 +9,22 @@ void main() {
       expect(PeriodTrackerService.formatDateId(date), '2026-05-04');
     });
 
+    test('period start and end dates preserve a month boundary', () {
+      final start = DateTime(2026, 1, 31, 23, 59);
+      final end = DateTime(2026, 2, 2, 0, 1);
+
+      expect(PeriodTrackerService.formatDateId(start), '2026-01-31');
+      expect(PeriodTrackerService.formatDateId(end), '2026-02-02');
+      expect(
+        () => PeriodTrackerService.validatePeriodRecord(
+          startDate: start,
+          endDate: end,
+          today: DateTime(2026, 2, 2),
+        ),
+        returnsNormally,
+      );
+    });
+
     test('entryToLegacyMap converts Supabase row shape for UI state', () {
       final mapped = PeriodTrackerService.entryToLegacyMap({
         'entry_date': '2026-05-04',

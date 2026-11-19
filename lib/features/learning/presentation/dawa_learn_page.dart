@@ -10,6 +10,10 @@ import '/design_system/dawa_page_scaffold.dart';
 import '../data/dawa_learning_repository.dart';
 import '../domain/dawa_learning_content.dart';
 
+int _completedLessons(DawaLearningState state) => DawaLearningCatalog.items
+    .where((item) => state.completedIds.contains(item.id))
+    .length;
+
 class DawaLearnPage extends StatefulWidget {
   const DawaLearnPage({
     super.key,
@@ -72,7 +76,6 @@ class _DawaLearnPageState extends State<DawaLearnPage> {
         children: [
           DawaAppHeader(
             title: 'Learn',
-            notificationUnread: true,
             onNotifications: () => context.push('/notifications'),
             onProfile: () => context.go('/settings'),
           ),
@@ -100,22 +103,46 @@ class _DawaLearnPageState extends State<DawaLearnPage> {
           const SizedBox(height: 10),
           Semantics(
             label: 'Learning categories',
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.only(right: DawaSpacing.md),
-              child: Row(
-                children: [
-                  for (final category in DawaLearningCatalog.categories)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 7),
-                      child: ChoiceChip(
-                        label: Text(category),
-                        selected: category == _category,
-                        onSelected: (_) => setState(() => _category = category),
+            hint: 'Swipe horizontally to browse every category',
+            child: Stack(
+              alignment: Alignment.centerRight,
+              children: [
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.only(right: DawaSpacing.xxl),
+                  child: Row(
+                    children: [
+                      for (final category in DawaLearningCatalog.categories)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 7),
+                          child: ChoiceChip(
+                            label: Text(category),
+                            selected: category == _category,
+                            onSelected: (_) =>
+                                setState(() => _category = category),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                IgnorePointer(
+                  child: Container(
+                    width: 34,
+                    height: 42,
+                    alignment: Alignment.centerRight,
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0x00FFFAF4), DawaColors.canvas],
                       ),
                     ),
-                ],
-              ),
+                    child: const Icon(
+                      Icons.chevron_right_rounded,
+                      size: 20,
+                      color: DawaColors.primary,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 16),
@@ -243,10 +270,10 @@ class _LearningContent extends StatelessWidget {
           children: [
             Expanded(
               child: _MetricCard(
-                icon: Icons.local_fire_department_rounded,
-                color: const Color(0xFFF0843E),
-                value: '${state.streak} day streak',
-                label: 'Today’s check-in',
+                icon: Icons.menu_book_rounded,
+                color: DawaColors.green,
+                value: '${_completedLessons(state)} lessons',
+                label: 'Learning progress',
               ),
             ),
             const SizedBox(width: 10),
@@ -295,10 +322,10 @@ class _LearningContent extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Earn coins from healthy actions',
+                    Text('Build points through learning',
                         style: context.dawaSectionTitle),
                     Text(
-                      'Check in • Learn • Track • Share',
+                      'Eligible lessons, quests and health games award points when completed.',
                       style: context.dawaCaption,
                     ),
                   ],
@@ -397,10 +424,10 @@ class _FeaturedLearningContent extends StatelessWidget {
           children: [
             Expanded(
               child: _MetricCard(
-                icon: Icons.local_fire_department_rounded,
-                color: const Color(0xFFF0843E),
-                value: '${state.streak} day streak',
-                label: 'Today’s check-in',
+                icon: Icons.menu_book_rounded,
+                color: DawaColors.green,
+                value: '${_completedLessons(state)} lessons',
+                label: 'Learning progress',
               ),
             ),
             const SizedBox(width: 10),
@@ -475,7 +502,7 @@ class _FeaturedLearningContent extends StatelessWidget {
                   children: [
                     Text('Play health games', style: context.dawaSectionTitle),
                     Text(
-                      'Test your knowledge • Earn 10 points',
+                      'Test your knowledge • Earn 10 points the first time you complete each game.',
                       style: context.dawaCaption,
                     ),
                   ],

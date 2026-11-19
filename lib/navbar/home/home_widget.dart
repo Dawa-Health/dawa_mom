@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:dawa_mom/navbar/appointments/appointment_details/appointment_details_widget.dart';
+
+import '/features/appointments/domain/appointment.dart';
 
 import '/auth/supabase_auth/auth_util.dart';
 import '/backend/backend.dart';
@@ -14,8 +15,10 @@ import '/components/responsive/upcoming_appointment_section.dart';
 import '/components/shimmer/shimmer_widget.dart';
 import '/features/settings/dawa_mom_settings_page.dart';
 import '/features/preferences/dawa_user_preferences_repository.dart';
+import '/features/feedback/dawa_feedback_effects.dart';
 import '/features/pregnancy/presentation/pregnancy_what_to_expect.dart';
 import '/features/period_tracker/presentation/period_cycle_status_card.dart';
+import '/features/rudo/presentation/rudo_action_cards.dart';
 import '/flutter_flow/flutter_flow_animations.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
@@ -25,10 +28,13 @@ import 'package:collection/collection.dart';
 import '/localization/dawa_localized_material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:lottie/lottie.dart';
 import 'package:provider/provider.dart';
 import 'home_model.dart';
 export 'home_model.dart';
 import 'dart:math' as math;
+import 'package:dawa_mom/rudo_voice_transcription.dart';
+import 'package:dawa_mom/widgets/confirm_transcript_sheet.dart';
 
 class HomeWidget extends StatefulWidget {
   const HomeWidget({
@@ -883,7 +889,8 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
                                       },
                                     );
                                   } else {
-                                    await showModalBottomSheet(
+                                    final result = await showModalBottomSheet<
+                                        AppointmentBookingResult>(
                                       isScrollControlled: true,
                                       backgroundColor: Colors.transparent,
                                       enableDrag: false,
@@ -902,7 +909,16 @@ class _HomeWidgetState extends State<HomeWidget> with TickerProviderStateMixin {
                                           ),
                                         );
                                       },
-                                    ).then((value) => safeSetState(() {}));
+                                    );
+                                    if (result != null &&
+                                        (!result.appointment
+                                                .requiresOnlinePayment ||
+                                            result.paymentSucceeded)) {
+                                      unawaited(
+                                        DawaFeedbackEffects.appointmentBooked(),
+                                      );
+                                    }
+                                    safeSetState(() {});
                                   }
 
                                   safeSetState(() {});
@@ -995,6 +1011,11 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
   String? _voiceErrorMessage;
   String? _sessionId;
   String _rudoLanguage = DawaLanguages.english;
+  // Language the edge function detected in the patient's latest message. Used to
+  // pick the text-to-speech voice, so a Shona message is not spoken with the
+  // English voice just because the app setting says English.
+  String? _lastReplyLanguage;
+  bool _reducedFeedbackAnimations = false;
 
   SupabaseDatabase get _database => SupabaseDatabase.instance;
 
@@ -1067,11 +1088,18 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
   Future<void> _loadRudoLanguage() async {
     try {
       final preferences = await _preferencesRepository.load();
-      _rudoLanguage = preferences.rudoLanguageEnabled
-          ? preferences.language
-          : DawaLanguages.english;
+      if (!mounted) return;
+      setState(() {
+        _rudoLanguage = preferences.rudoLanguageEnabled
+            ? preferences.language
+            : DawaLanguages.english;
+        _reducedFeedbackAnimations = preferences.reducedAnimations;
+      });
     } catch (_) {
-      _rudoLanguage = DawaLocaleController.instance.languageName;
+      if (!mounted) return;
+      setState(
+        () => _rudoLanguage = DawaLocaleController.instance.languageName,
+      );
     }
   }
 
@@ -1107,13 +1135,23 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
     final loadedMessages = (rows as List)
         .map((row) {
           final data = Map<String, dynamic>.from(row as Map);
+          final rawContent = data['content']?.toString() ?? '';
+          final isUser = data['role'] == 'user';
+          Map<String, dynamic>? action;
+          if (!isUser) {
+            final payload = data['payload'];
+            if (payload is Map && payload['action'] is Map) {
+              action = Map<String, dynamic>.from(payload['action'] as Map);
+            }
+          }
           return ChatMessage(
             id: data['id']?.toString() ?? '',
-            text: data['content']?.toString() ?? '',
-            isUser: data['role'] == 'user',
+            text: isUser ? rudoDisplayTextFor(rawContent) : rawContent,
+            isUser: isUser,
             timestamp:
                 DateTime.tryParse(data['created_at']?.toString() ?? '') ??
                     DateTime.now(),
+            action: action,
           );
         })
         .where((message) => message.text.isNotEmpty)
@@ -1133,7 +1171,7 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
     });
   }
 
-  Future<String?> _sendMessage(String message) async {
+  Future<String?> _sendMessage(String message, {String? displayText}) async {
     if (_isSending || _isInitializing) {
       return null;
     }
@@ -1153,7 +1191,7 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
     final clientMessageId = '${DateTime.now().microsecondsSinceEpoch}-$userId';
     final localUserMessage = ChatMessage(
       id: clientMessageId,
-      text: trimmedMessage,
+      text: displayText ?? trimmedMessage,
       isUser: true,
       timestamp: DateTime.now(),
     );
@@ -1168,7 +1206,7 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
 
     try {
       final response = await _database.client.functions.invoke(
-        'rudo-chat',
+        'rudo-chat-medgemma',
         body: {
           'message': trimmedMessage,
           if (_sessionId != null) 'session_id': _sessionId,
@@ -1191,14 +1229,22 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
         _sessionId = data['session_id'].toString();
       }
 
+      // Language the edge function detected in what the patient wrote. Null when the
+      // response has none (older function version), in which case the app setting is used.
+      _lastReplyLanguage = data['language']?.toString();
+
       final reply =
           data['reply']?.toString() ?? data['response']?.toString() ?? '';
-      if (reply.isNotEmpty) {
+      final action = data['action'] is Map
+          ? Map<String, dynamic>.from(data['action'] as Map)
+          : null;
+      if (reply.isNotEmpty || action != null) {
         _addMessage(ChatMessage(
           id: '${clientMessageId}-assistant',
           text: reply,
           isUser: false,
           timestamp: DateTime.now(),
+          action: action,
         ));
       }
 
@@ -1268,7 +1314,7 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
     final voiceLang = _currentVoiceLanguage();
     if (!_voiceSupportedLanguages.contains(voiceLang)) {
       // Mirrors the backend's voice-language gate (see get_voice_unsupported_response
-      // in sahara_client.py) — don't touch the mic or transcript state at all,
+      // in sahara_client.py) - don't touch the mic or transcript state at all,
       // just show the unsupported screen with a way back to text.
       setState(() {
         _isVoiceMode = true;
@@ -1281,7 +1327,7 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
 
     setState(() {
       _isVoiceMode = true;
-      // "listening" now means "recording" — see _buildVoiceMode's status
+      // "listening" now means "recording" - see _buildVoiceMode's status
       // label. Unlike the old on-device speech_to_text flow, there's no
       // live transcript while recording; the user taps the orb to stop
       // and send, and the transcript only appears once Sahara replies.
@@ -1319,9 +1365,9 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
     await _voiceService.cancelRecording();
   }
 
-  /// Tap-to-stop handler — called from the orb while _voiceState is
+  /// Tap-to-stop handler - called from the orb while _voiceState is
   /// `listening` (i.e. actively recording). Stops the recording, uploads
-  /// it to Sahara via the rudo-chat edge function's audio_base64 path,
+  /// it to Sahara via the rudo-chat-medgemma edge function's audio_base64 path,
   /// shows the transcript + reply once they come back, speaks the reply,
   /// then restarts recording so the conversation can continue hands-free.
   Future<void> _stopRecordingAndSend() async {
@@ -1340,7 +1386,7 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
     try {
       final audioBytes = await _voiceService.stopRecording();
       if (audioBytes == null || audioBytes.isEmpty) {
-        _showVoiceError('No audio captured — please try again.');
+        _showVoiceError('No audio captured - please try again.');
         if (mounted && _isVoiceMode) {
           setState(() => _voiceState = _VoiceModeState.listening);
           await _voiceService.startRecording();
@@ -1378,10 +1424,12 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
     }
   }
 
-  /// Uploads a recorded voice note to the rudo-chat edge function
+  /// Uploads a recorded voice note to the rudo-chat-medgemma edge function
   /// (audio_base64 path -> Vercel /api/voice -> Sahara STT -> grounded
   /// text pipeline -> reply). Adds both the transcript and reply as chat
   /// bubbles, same as _sendMessage does for typed text.
+  /// Voice note flow: transcribe only -> user edits -> send as normal text.
+  /// Nothing reaches the chat model until the user taps Send.
   Future<String?> _sendVoiceNote(Uint8List audioBytes) async {
     final userId = currentUserUid;
     if (userId.isEmpty) {
@@ -1389,83 +1437,40 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
       return null;
     }
 
-    final clientMessageId =
-        '${DateTime.now().microsecondsSinceEpoch}-$userId-voice';
-
-    setState(() => _isSending = true);
-
+    VoiceTranscript t;
     try {
-      final response = await _database.client.functions.invoke(
-        'rudo-chat',
-        body: {
-          'audio_base64': base64Encode(audioBytes),
-          'filename': 'voice_note.m4a',
-          'mime_type': 'audio/mp4',
-          if (_sessionId != null) 'session_id': _sessionId,
-          'client_message_id': clientMessageId,
-          'metadata': {
-            'phone_number': widget.userPhoneNumber,
-            'user_name': widget.userName,
-            'language': _rudoLanguage,
-            'source': 'flutter_voice',
-          },
-        },
-      ).timeout(const Duration(seconds: 60));
-
-      final responseData = response.data;
-      final data = responseData is Map
-          ? Map<String, dynamic>.from(responseData)
-          : <String, dynamic>{};
-
-      if (data['session_id'] != null) {
-        _sessionId = data['session_id'].toString();
-      }
-
-      final transcript = data['transcript']?.toString().trim() ?? '';
-      final reply = data['reply']?.toString().trim() ?? '';
-
-      if (transcript.isNotEmpty) {
-        _addMessage(ChatMessage(
-          id: '$clientMessageId-user',
-          text: transcript,
-          isUser: true,
-          timestamp: DateTime.now(),
-        ));
-        setState(() => _voiceTranscriptPreview = transcript);
-      }
-      if (reply.isNotEmpty) {
-        _addMessage(ChatMessage(
-          id: '$clientMessageId-assistant',
-          text: reply,
-          isUser: false,
-          timestamp: DateTime.now(),
-        ));
-      }
-
-      await _loadMessages();
-      if (mounted) {
-        setState(() => _isConnected = true);
-      }
-      return reply.isNotEmpty ? reply : null;
+      t = await transcribeVoiceNote(
+        audioBytes: audioBytes,
+        language: _rudoLanguage, // use your existing language variable
+        languageLocked: true,
+      );
     } catch (error) {
-      debugPrint('Rudo voice note send failed: $error');
+      debugPrint('Rudo transcription failed: $error');
       _addMessage(ChatMessage(
-        id: '$clientMessageId-error',
-        text:
-            'Rudo is having trouble reaching the assistant service. Please try again.',
+        id: '${DateTime.now().microsecondsSinceEpoch}-transcribe-error',
+        text: 'I couldn’t transcribe that. Please try again or type your message.',
         isUser: false,
         timestamp: DateTime.now(),
       ));
-      if (mounted) {
-        setState(() => _isConnected = false);
-      }
-      return null;
-    } finally {
-      if (mounted) {
-        setState(() => _isSending = false);
-      }
-      _scrollToBottom();
+      return null; // do not mark the whole service offline
     }
+
+    if (!t.voiceSupported || !t.valid) {
+      _addMessage(ChatMessage(
+        id: '${DateTime.now().microsecondsSinceEpoch}-voice-notice',
+        text: t.message ?? 'I couldn’t hear that clearly. Please try again.',
+        isUser: false,
+        timestamp: DateTime.now(),
+      ));
+      return null;
+    }
+
+    if (!mounted) return null;
+    final decision = await confirmTranscript(context, t.transcript);
+    if (decision.action != TranscriptAction.send) return null;
+
+    // Normal text turn: new client_message_id, session and metadata handled by _sendMessage.
+    return _sendMessage(decision.text);
   }
 
   Future<void> _speakVoiceReply(String reply) async {
@@ -1474,9 +1479,11 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
     }
     setState(() => _voiceState = _VoiceModeState.speaking);
     try {
+      // Speak in the language the edge function detected in the patient's confirmed
+      // text. Falls back to the app setting when the response had no language.
       await _voiceService.speakText(
         reply,
-        _currentVoiceLanguage(),
+        _currentVoiceLanguage(override: _lastReplyLanguage),
       );
     } catch (error) {
       debugPrint('Rudo voice playback failed: $error');
@@ -1506,8 +1513,13 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
     );
   }
 
-  String _currentVoiceLanguage() {
-    return switch (_rudoLanguage.toLowerCase()) {
+  /// Maps a language name to the key the voice service expects. Uses [override]
+  /// (for example the language the edge function detected) when given, otherwise
+  /// the app's Rudo language setting.
+  String _currentVoiceLanguage({String? override}) {
+    final source =
+        (override != null && override.isNotEmpty) ? override : _rudoLanguage;
+    return switch (source.toLowerCase()) {
       'shona' => 'shona',
       'ndebele' => 'ndebele',
       'tonga' => 'tonga',
@@ -1580,7 +1592,20 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
       itemCount: _messages.length + (_isLoading ? 1 : 0),
       itemBuilder: (context, index) {
         if (index < _messages.length) {
-          return _ChatBubble(message: _messages[index]);
+          final message = _messages[index];
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _ChatBubble(message: message),
+              if (message.action != null)
+                RudoActionCard(
+                  action: message.action!,
+                  onSendAction: (actionJson, displayText) => unawaited(
+                    _sendMessage(actionJson, displayText: displayText),
+                  ),
+                ),
+            ],
+          );
         }
         return _TypingIndicator();
       },
@@ -1600,6 +1625,8 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
       _VoiceModeState.unsupported => '', // handled above
     };
     final voiceDetail = _voiceErrorMessage ?? _voiceTranscriptPreview.trim();
+    final reduceMotion =
+        _reducedFeedbackAnimations || MediaQuery.disableAnimationsOf(context);
 
     return SafeArea(
       top: false,
@@ -1619,11 +1646,14 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
                       child: _VoiceOrb(
                         controller: _voiceController,
                         state: _voiceState,
+                        reduceMotion: reduceMotion,
                       ),
                     ),
                     const SizedBox(height: 22),
                     AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 220),
+                      duration: reduceMotion
+                          ? Duration.zero
+                          : const Duration(milliseconds: 220),
                       child: Text(
                         statusLabel,
                         key: ValueKey(statusLabel),
@@ -1638,7 +1668,9 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
                     if (voiceDetail.isNotEmpty) ...[
                       const SizedBox(height: 12),
                       AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 220),
+                        duration: reduceMotion
+                            ? Duration.zero
+                            : const Duration(milliseconds: 220),
                         child: ConstrainedBox(
                           key: ValueKey(voiceDetail),
                           constraints: const BoxConstraints(maxWidth: 320),
@@ -1774,35 +1806,41 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
     }
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: _suggestions
-              .map((suggestion) => Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ActionChip(
-                      label: Text(
-                        suggestion,
-                        style: TextStyle(
-                          color: FlutterFlowTheme.of(context).primary,
-                          fontFamily: 'Poppins',
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      backgroundColor:
-                          FlutterFlowTheme.of(context).secondaryBackground,
-                      disabledColor: FlutterFlowTheme.of(context).alternate,
-                      side: BorderSide(
-                        color: FlutterFlowTheme.of(context).primary,
-                      ),
-                      shape: const StadiumBorder(),
-                      onPressed: _isInitializing || _isSending
-                          ? null
-                          : () => _sendMessage(suggestion),
-                    ),
-                  ))
-              .toList(),
+      child: SizedBox(
+        height: 42,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: _suggestions.length,
+          padding: EdgeInsets.zero,
+          separatorBuilder: (_, __) => const SizedBox(width: 8),
+          itemBuilder: (context, index) {
+            final suggestion = _suggestions[index];
+            return ActionChip(
+              label: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 220),
+                child: Text(
+                  suggestion,
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: FlutterFlowTheme.of(context).primary,
+                    fontFamily: 'Poppins',
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              backgroundColor: FlutterFlowTheme.of(context).secondaryBackground,
+              disabledColor: FlutterFlowTheme.of(context).alternate,
+              side: BorderSide(
+                color: FlutterFlowTheme.of(context).primary,
+              ),
+              shape: const StadiumBorder(),
+              onPressed: _isInitializing || _isSending
+                  ? null
+                  : () => _sendMessage(suggestion),
+            );
+          },
         ),
       ),
     );
@@ -1924,80 +1962,81 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
   }
 
   Widget _buildInputBar(bool hasText) {
-  final canSend = !_isInitializing && !_isSending;
+    final canSend = !_isInitializing && !_isSending;
 
-  return SafeArea(
-    top: false,
-    child: Container(
-      // OUTER container — wraps the whole input row, separates it from the
-      // chat list above with a top border. Leave this as-is.
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-      decoration: BoxDecoration(
-        color: FlutterFlowTheme.of(context).primaryBackground,
-        border: Border(
-          top: BorderSide(
-            color: FlutterFlowTheme.of(context).alternate,
-            width: 1,
+    return SafeArea(
+      top: false,
+      child: Container(
+        // OUTER container - wraps the whole input row, separates it from the
+        // chat list above with a top border. Leave this as-is.
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+        decoration: BoxDecoration(
+          color: FlutterFlowTheme.of(context).primaryBackground,
+          border: Border(
+            top: BorderSide(
+              color: FlutterFlowTheme.of(context).alternate,
+              width: 1,
+            ),
+          ),
+        ),
+        child: Container(
+          // INNER container - this is the actual rounded "Type your message"
+          // pill. This is the one with the visible border in your screenshot.
+          constraints: const BoxConstraints(minHeight: 48),
+          decoration: BoxDecoration(
+            color: FlutterFlowTheme.of(context).primaryBackground,
+            borderRadius: BorderRadius.circular(999),
+            // border: Border.all(...) ← DELETE this whole property
+          ),
+          child: Row(
+            children: [
+              const SizedBox(width: 18),
+              Expanded(
+                child: TextField(
+                  controller: _messageController,
+                  enabled: canSend,
+                  minLines: 1,
+                  maxLines: 4,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (value) {
+                    if (value.trim().isNotEmpty) {
+                      unawaited(_sendMessage(value));
+                    }
+                  },
+                  decoration: InputDecoration(
+                    hintText: 'Type your message...',
+                    border: InputBorder.none,
+                    hintStyle: TextStyle(fontFamily: 'Poppins'),
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: hasText ? 'Send' : 'Start voice',
+                constraints:
+                    const BoxConstraints.tightFor(width: 46, height: 46),
+                icon: Icon(
+                  hasText ? Icons.send : Icons.mic,
+                  color: canSend
+                      ? FlutterFlowTheme.of(context).primary
+                      : FlutterFlowTheme.of(context).secondaryText,
+                ),
+                onPressed: !canSend
+                    ? null
+                    : () {
+                        if (hasText) {
+                          unawaited(_sendMessage(_messageController.text));
+                        } else {
+                          unawaited(_enterVoiceMode());
+                        }
+                      },
+              ),
+              const SizedBox(width: 4),
+            ],
           ),
         ),
       ),
-      child: Container(
-        // INNER container — this is the actual rounded "Type your message"
-        // pill. This is the one with the visible border in your screenshot.
-        constraints: const BoxConstraints(minHeight: 48),
-        decoration: BoxDecoration(
-          color: FlutterFlowTheme.of(context).primaryBackground,
-          borderRadius: BorderRadius.circular(999),
-          // border: Border.all(...) ← DELETE this whole property
-        ),
-        child: Row(
-          children: [
-            const SizedBox(width: 18),
-            Expanded(
-              child: TextField(
-                controller: _messageController,
-                enabled: canSend,
-                minLines: 1,
-                maxLines: 4,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (value) {
-                  if (value.trim().isNotEmpty) {
-                    unawaited(_sendMessage(value));
-                  }
-                },
-                decoration: InputDecoration(
-                  hintText: 'Type your message...',
-                  border: InputBorder.none,
-                  hintStyle: TextStyle(fontFamily: 'Poppins'),
-                ),
-              ),
-            ),
-            IconButton(
-              tooltip: hasText ? 'Send' : 'Start voice',
-              constraints: const BoxConstraints.tightFor(width: 46, height: 46),
-              icon: Icon(
-                hasText ? Icons.send : Icons.mic,
-                color: canSend
-                    ? FlutterFlowTheme.of(context).primary
-                    : FlutterFlowTheme.of(context).secondaryText,
-              ),
-              onPressed: !canSend
-                  ? null
-                  : () {
-                      if (hasText) {
-                        unawaited(_sendMessage(_messageController.text));
-                      } else {
-                        unawaited(_enterVoiceMode());
-                      }
-                    },
-            ),
-            const SizedBox(width: 4),
-          ],
-        ),
-      ),
-    ),
-  );
-}
+    );
+  }
 
   Widget _buildFooterNotice() {
     return Container(
@@ -2037,79 +2076,81 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
   }
 
   @override
-Widget build(BuildContext context) {
-  final hasText = _messageController.text.trim().isNotEmpty;
-  final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+  Widget build(BuildContext context) {
+    final hasText = _messageController.text.trim().isNotEmpty;
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
 
-  return AnimatedPadding(
-    duration: const Duration(milliseconds: 150),
-    curve: Curves.easeOut,
-    padding: EdgeInsets.only(bottom: keyboardInset),
-    child: Container(
-      decoration: BoxDecoration(
-        color: FlutterFlowTheme.of(context).secondaryBackground,
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(20),
-          topRight: Radius.circular(20),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.2),
-            blurRadius: 20,
-            spreadRadius: 5,
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 150),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: keyboardInset),
+      child: Container(
+        decoration: BoxDecoration(
+          color: FlutterFlowTheme.of(context).secondaryBackground,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(20),
+            topRight: Radius.circular(20),
           ),
-        ],
-      ),
-      child: Column(
-        children: [
-          _buildHeader(),
-          if (!_isConnected && !_isInitializing)
-            Container(
-              padding: const EdgeInsets.all(10),
-              color: Colors.orange.withValues(alpha: 0.1),
-              child: Row(
-                children: [
-                  const Icon(Icons.wifi_off, size: 16, color: Colors.orange),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      'Rudo assistant service is unavailable',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.orange,
-                        fontFamily: 'Poppins',
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 20,
+              spreadRadius: 5,
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            _buildHeader(),
+            if (!_isConnected && !_isInitializing)
+              Container(
+                padding: const EdgeInsets.all(10),
+                color: Colors.orange.withValues(alpha: 0.1),
+                child: Row(
+                  children: [
+                    const Icon(Icons.wifi_off, size: 16, color: Colors.orange),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Rudo assistant service is unavailable',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange,
+                          fontFamily: 'Poppins',
+                        ),
                       ),
                     ),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      setState(() => _isInitializing = true);
-                      _initializeChat();
-                    },
-                    child: const Text('Retry'),
-                  ),
-                ],
+                    TextButton(
+                      onPressed: () {
+                        setState(() => _isInitializing = true);
+                        _initializeChat();
+                      },
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          Expanded(child: _buildMessageList()),
-          if (!_isVoiceMode) _buildSuggestions(),
-          if (!_isVoiceMode) _buildInputBar(hasText),
-          if (!_isVoiceMode) _buildFooterNotice(),
-        ],
+            Expanded(child: _buildMessageList()),
+            if (!_isVoiceMode) _buildSuggestions(),
+            if (!_isVoiceMode) _buildInputBar(hasText),
+            if (!_isVoiceMode) _buildFooterNotice(),
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 }
 
 class _VoiceOrb extends StatelessWidget {
   const _VoiceOrb({
     required this.controller,
     required this.state,
+    required this.reduceMotion,
   });
 
   final AnimationController controller;
   final _VoiceModeState state;
+  final bool reduceMotion;
 
   @override
   Widget build(BuildContext context) {
@@ -2121,10 +2162,11 @@ class _VoiceOrb extends StatelessWidget {
     return AnimatedBuilder(
       animation: controller,
       builder: (context, child) {
-        final eased = Curves.easeInOut.transform(controller.value);
+        final animationValue = reduceMotion ? 0.0 : controller.value;
+        final eased = Curves.easeInOut.transform(animationValue);
         final listeningScale = 1 + (math.sin(eased * math.pi * 2) * 0.07);
         final speakingScale =
-            1 + (math.sin(controller.value * math.pi * 6) * 0.16);
+            1 + (math.sin(animationValue * math.pi * 6) * 0.16);
         final restingScale = 1 + (math.sin(eased * math.pi * 2) * 0.035);
         final scale = isSpeaking
             ? speakingScale
@@ -2138,9 +2180,9 @@ class _VoiceOrb extends StatelessWidget {
           child: Stack(
             alignment: Alignment.center,
             children: [
-              if (isListening || isSpeaking)
+              if (!reduceMotion && (isListening || isSpeaking))
                 ...List.generate(3, (index) {
-                  final progress = (controller.value + (index * 0.24)) % 1;
+                  final progress = (animationValue + (index * 0.24)) % 1;
                   final pulseSize = isSpeaking ? 92.0 : 76.0;
                   return Transform.scale(
                     scale: 0.65 + (progress * (isSpeaking ? 1.2 : 0.95)),
@@ -2160,9 +2202,9 @@ class _VoiceOrb extends StatelessWidget {
                     ),
                   );
                 }),
-              if (isProcessing)
+              if (isProcessing && !reduceMotion)
                 Transform.rotate(
-                  angle: controller.value * math.pi * 2,
+                  angle: animationValue * math.pi * 2,
                   child: CustomPaint(
                     size: const Size(136, 136),
                     painter: _VoiceSpinnerPainter(primary),
@@ -2171,7 +2213,9 @@ class _VoiceOrb extends StatelessWidget {
               Transform.scale(
                 scale: scale,
                 child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
+                  duration: reduceMotion
+                      ? Duration.zero
+                      : const Duration(milliseconds: 300),
                   curve: Curves.easeInOut,
                   width: isSpeaking ? 96 : 88,
                   height: isSpeaking ? 96 : 88,
@@ -2200,17 +2244,28 @@ class _VoiceOrb extends StatelessWidget {
                       ),
                     ],
                   ),
-                  child: Icon(
-                    isSpeaking
-                        ? Icons.graphic_eq
-                        : isProcessing
-                            ? Icons.auto_awesome
-                            : isListening
-                                ? Icons.mic
-                                : Icons.graphic_eq,
-                    color: Colors.white,
-                    size: 32,
-                  ),
+                  child: isListening && !reduceMotion
+                      ? IgnorePointer(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Lottie.asset(
+                              'assets/lotties/mic.json',
+                              repeat: true,
+                              fit: BoxFit.contain,
+                            ),
+                          ),
+                        )
+                      : Icon(
+                          isSpeaking
+                              ? Icons.graphic_eq
+                              : isProcessing
+                                  ? Icons.auto_awesome
+                                  : isListening
+                                      ? Icons.mic
+                                      : Icons.graphic_eq,
+                          color: Colors.white,
+                          size: 32,
+                        ),
                 ),
               ),
             ],
@@ -2432,16 +2487,47 @@ class _TypingIndicator extends StatelessWidget {
 }
 
 // Chat message model
+const String kRudoActionPrefix = '__rudo_action__:';
+
 class ChatMessage {
   final String id;
   final String text;
   final bool isUser;
   final DateTime timestamp;
+  final Map<String, dynamic>? action;
 
   ChatMessage({
     required this.id,
     required this.text,
     required this.isUser,
     required this.timestamp,
+    this.action,
   });
+}
+
+/// Builds a human-readable label for a raw chat_messages.content value.
+/// User taps on structured chips send a reserved `__rudo_action__:{...}`
+/// payload to the backend; this renders a friendly label instead of the
+/// raw JSON when messages are reloaded from the database.
+String rudoDisplayTextFor(String rawContent) {
+  if (!rawContent.startsWith(kRudoActionPrefix)) {
+    return rawContent;
+  }
+  try {
+    final decoded = jsonDecode(
+      rawContent.substring(kRudoActionPrefix.length),
+    ) as Map<String, dynamic>;
+    switch (decoded['type']) {
+      case 'confirm':
+        return 'Confirm appointment';
+      case 'change':
+        return 'Change details';
+      case 'cancel':
+        return 'Cancel';
+      default:
+        return 'Selected';
+    }
+  } catch (_) {
+    return rawContent;
+  }
 }

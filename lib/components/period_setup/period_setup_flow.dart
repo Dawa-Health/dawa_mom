@@ -2,6 +2,8 @@ import '/localization/dawa_localized_material.dart';
 import 'package:intl/intl.dart';
 
 import '/backend/period_tracker_service.dart';
+import '/design_system/dawa_components.dart';
+import '/design_system/dawa_design_tokens.dart';
 import '/features/profile/data/health_profile_repository.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 
@@ -28,8 +30,11 @@ Future<PeriodSetupOutcome?> showPeriodSetupFlow(
           ? EdgeInsets.zero
           : const EdgeInsets.symmetric(horizontal: 28, vertical: 30),
       clipBehavior: Clip.antiAlias,
+      backgroundColor: DawaColors.canvas,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(compact ? 0 : 20),
+        borderRadius: BorderRadius.circular(
+          compact ? 0 : DawaRadii.feature,
+        ),
       ),
       child: SizedBox(
         width: compact ? double.infinity : 620,
@@ -266,9 +271,7 @@ class _PeriodSetupFormState extends State<PeriodSetupForm> {
                             widget.registration
                                 ? 'Set up your Period Tracker'
                                 : 'Period Tracker setup',
-                            style: theme.headlineSmall.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
+                            style: context.dawaTitle,
                           ),
                         ),
                       ],
@@ -276,8 +279,8 @@ class _PeriodSetupFormState extends State<PeriodSetupForm> {
                     const SizedBox(height: 14),
                     Text(
                       'Add your recent period information to receive cycle and period estimates. You can skip this and complete it later.',
-                      style: theme.bodyMedium.copyWith(
-                        color: theme.secondaryText,
+                      style: context.dawaBody.copyWith(
+                        color: DawaColors.textSecondary,
                       ),
                     ),
                     const SizedBox(height: 24),
@@ -309,7 +312,6 @@ class _PeriodSetupFormState extends State<PeriodSetupForm> {
                               labelText: 'Average cycle length',
                               helperText: 'Optional if known; 28 is common',
                               suffixText: 'days',
-                              border: OutlineInputBorder(),
                             ),
                             validator: (value) {
                               final number = int.tryParse(value ?? '');
@@ -330,7 +332,6 @@ class _PeriodSetupFormState extends State<PeriodSetupForm> {
                               labelText: 'Average period duration',
                               helperText: 'Optional if known; 5 is common',
                               suffixText: 'days',
-                              border: OutlineInputBorder(),
                             ),
                             validator: (value) {
                               final number = int.tryParse(value ?? '');
@@ -395,29 +396,31 @@ class _PeriodSetupFormState extends State<PeriodSetupForm> {
           Container(
             padding: const EdgeInsets.fromLTRB(24, 12, 24, 20),
             decoration: BoxDecoration(
-              color: theme.secondaryBackground,
-              border: Border(top: BorderSide(color: theme.alternate)),
+              color: DawaColors.canvas,
+              border: const Border(top: BorderSide(color: DawaColors.line)),
             ),
             child: Row(
               children: [
                 if (widget.allowSkip)
-                  TextButton(
-                    key: const ValueKey('skip-period-setup'),
-                    onPressed: _saving ? null : _skip,
-                    child: const Text('Skip for now'),
+                  Expanded(
+                    child: DawaTextButton(
+                      key: const ValueKey('skip-period-setup'),
+                      label: 'Skip for now',
+                      fullWidth: true,
+                      compact: true,
+                      onPressed: _saving ? null : _skip,
+                    ),
                   ),
-                const Spacer(),
-                FilledButton.icon(
-                  key: const ValueKey('continue-period-setup'),
-                  onPressed: _saving ? null : _submit,
-                  icon: _saving
-                      ? const SizedBox.square(
-                          dimension: 17,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.arrow_forward_rounded),
-                  label: const Text('Continue'),
-                  style: FilledButton.styleFrom(backgroundColor: theme.primary),
+                if (widget.allowSkip) const SizedBox(width: DawaSpacing.xs),
+                Expanded(
+                  child: DawaCompactButton(
+                    key: const ValueKey('continue-period-setup'),
+                    onPressed: _saving ? null : _submit,
+                    busy: _saving,
+                    filled: true,
+                    icon: Icons.arrow_forward_rounded,
+                    label: 'Continue',
+                  ),
                 ),
               ],
             ),
@@ -453,10 +456,9 @@ class _DateField extends StatelessWidget {
             color: Colors.transparent,
             child: InkWell(
               onTap: onTap,
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(DawaRadii.medium),
               child: InputDecorator(
                 decoration: InputDecoration(
-                  border: const OutlineInputBorder(),
                   prefixIcon: const Icon(Icons.calendar_today_outlined),
                   suffixIcon: onClear == null
                       ? const Icon(Icons.arrow_drop_down_rounded)

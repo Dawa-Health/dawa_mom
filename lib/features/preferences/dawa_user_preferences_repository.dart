@@ -20,6 +20,9 @@ class DawaUserPreferences {
     this.quietHoursStart = '21:00',
     this.quietHoursEnd = '07:00',
     this.privateLockScreen = true,
+    this.soundEffectsEnabled = true,
+    this.reducedAnimations = false,
+    this.hapticFeedbackEnabled = true,
   });
 
   final String language;
@@ -34,6 +37,9 @@ class DawaUserPreferences {
   final String quietHoursStart;
   final String quietHoursEnd;
   final bool privateLockScreen;
+  final bool soundEffectsEnabled;
+  final bool reducedAnimations;
+  final bool hapticFeedbackEnabled;
 
   DawaUserPreferences copyWith({
     String? language,
@@ -48,6 +54,9 @@ class DawaUserPreferences {
     String? quietHoursStart,
     String? quietHoursEnd,
     bool? privateLockScreen,
+    bool? soundEffectsEnabled,
+    bool? reducedAnimations,
+    bool? hapticFeedbackEnabled,
   }) =>
       DawaUserPreferences(
         language: language ?? this.language,
@@ -65,6 +74,10 @@ class DawaUserPreferences {
         quietHoursStart: quietHoursStart ?? this.quietHoursStart,
         quietHoursEnd: quietHoursEnd ?? this.quietHoursEnd,
         privateLockScreen: privateLockScreen ?? this.privateLockScreen,
+        soundEffectsEnabled: soundEffectsEnabled ?? this.soundEffectsEnabled,
+        reducedAnimations: reducedAnimations ?? this.reducedAnimations,
+        hapticFeedbackEnabled:
+            hapticFeedbackEnabled ?? this.hapticFeedbackEnabled,
       );
 }
 
@@ -76,6 +89,8 @@ class DawaUserPreferencesRepository {
         _client = client;
 
   static final ValueNotifier<int> changes = ValueNotifier<int>(0);
+  static final ValueNotifier<bool> feedbackAnimationsReduced =
+      ValueNotifier<bool>(false);
 
   SharedPreferences? _preferences;
   SupabaseClient? _client;
@@ -92,6 +107,9 @@ class DawaUserPreferencesRepository {
   static const _quietHoursStartKey = 'dawa_notify_quiet_hours_start';
   static const _quietHoursEndKey = 'dawa_notify_quiet_hours_end';
   static const _privateLockScreenKey = 'dawa_notify_private_lock_screen';
+  static const _soundEffectsKey = 'dawa_feedback_sound_effects';
+  static const _reducedAnimationsKey = 'dawa_feedback_reduced_animations';
+  static const _hapticFeedbackKey = 'dawa_feedback_haptic_feedback';
 
   Future<SharedPreferences> get _prefs async =>
       _preferences ??= await SharedPreferences.getInstance();
@@ -122,7 +140,11 @@ class DawaUserPreferencesRepository {
       quietHoursStart: prefs.getString(_quietHoursStartKey) ?? '21:00',
       quietHoursEnd: prefs.getString(_quietHoursEndKey) ?? '07:00',
       privateLockScreen: prefs.getBool(_privateLockScreenKey) ?? true,
+      soundEffectsEnabled: prefs.getBool(_soundEffectsKey) ?? true,
+      reducedAnimations: prefs.getBool(_reducedAnimationsKey) ?? false,
+      hapticFeedbackEnabled: prefs.getBool(_hapticFeedbackKey) ?? true,
     );
+    feedbackAnimationsReduced.value = local.reducedAnimations;
     await DawaLocaleController.instance.setLanguage(
       local.language,
       persist: false,
@@ -166,8 +188,14 @@ class DawaUserPreferencesRepository {
         ),
         privateLockScreen:
             row['private_lock_screen'] as bool? ?? local.privateLockScreen,
+        // Feedback preferences are intentionally local-only until their
+        // columns are introduced through a dedicated server migration.
+        soundEffectsEnabled: local.soundEffectsEnabled,
+        reducedAnimations: local.reducedAnimations,
+        hapticFeedbackEnabled: local.hapticFeedbackEnabled,
       );
       await _saveLocal(remote);
+      feedbackAnimationsReduced.value = remote.reducedAnimations;
       await DawaLocaleController.instance.setLanguage(remote.language);
       return remote;
     } on PostgrestException catch (error) {
@@ -181,6 +209,7 @@ class DawaUserPreferencesRepository {
       language: _normalizeLanguage(value.language),
     );
     await _saveLocal(normalized);
+    feedbackAnimationsReduced.value = normalized.reducedAnimations;
     await DawaLocaleController.instance.setLanguage(normalized.language);
     unawaited(_sync(normalized));
     changes.value += 1;
@@ -202,6 +231,9 @@ class DawaUserPreferencesRepository {
       prefs.setString(_quietHoursStartKey, value.quietHoursStart),
       prefs.setString(_quietHoursEndKey, value.quietHoursEnd),
       prefs.setBool(_privateLockScreenKey, value.privateLockScreen),
+      prefs.setBool(_soundEffectsKey, value.soundEffectsEnabled),
+      prefs.setBool(_reducedAnimationsKey, value.reducedAnimations),
+      prefs.setBool(_hapticFeedbackKey, value.hapticFeedbackEnabled),
     ]);
   }
 

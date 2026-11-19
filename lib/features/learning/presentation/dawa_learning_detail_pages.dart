@@ -8,11 +8,15 @@ import '/content/dawa_learning_asset_registry.dart';
 import '/design_system/dawa_components.dart';
 import '/design_system/dawa_contextual_image.dart';
 import '/design_system/dawa_design_tokens.dart';
+import '/design_system/dawa_interactions.dart';
 import '/design_system/dawa_page_scaffold.dart';
+import '/features/feedback/dawa_feedback_effects.dart';
 import '/features/profile/data/health_profile_repository.dart';
 import '/services/voice_service.dart';
 import '../data/dawa_learning_repository.dart';
 import '../domain/dawa_learning_content.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'dart:typed_data';
 
 class DawaArticlePage extends StatefulWidget {
   const DawaArticlePage({super.key, this.repository});
@@ -286,6 +290,8 @@ class _DawaPregnancyGuideDetailPageState
   late final DawaLearningRepository _repository;
   late final VoiceService _voiceService;
   late Future<DawaLearningState> _state;
+  DawaLearningState? _completionBefore;
+  DawaLearningState? _completionAfter;
   bool _speaking = false;
 
   bool get _isClinic => widget.guideId == 'clinic-visit';
@@ -311,7 +317,15 @@ class _DawaPregnancyGuideDetailPageState
 
   Future<void> _complete(DawaLearningState state) async {
     final next = await _repository.complete(state, widget.guideId);
-    if (mounted) setState(() => _state = Future.value(next));
+    if (!mounted) return;
+    setState(() {
+      _completionBefore = state;
+      _completionAfter = next;
+      _state = Future.value(next);
+    });
+    if (next.coins > state.coins) {
+      unawaited(DawaFeedbackEffects.learningAwardConfirmed());
+    }
   }
 
   Future<void> _listenToGuide(String title, String subtitle) async {
@@ -457,6 +471,19 @@ class _DawaPregnancyGuideDetailPageState
               );
             },
           ),
+          if (_completionBefore != null && _completionAfter != null) ...[
+            const SizedBox(height: 12),
+            _DawaLearningCompletionFeedback(
+              before: _completionBefore!,
+              after: _completionAfter!,
+              contentId: widget.guideId,
+              completedTitle: 'Guide completed',
+              completedMessage:
+                  'This guide is saved in your learning progress.',
+              alreadyCompletedMessage:
+                  'This guide was already saved in your learning progress.',
+            ),
+          ],
           const SizedBox(height: 18),
           if (_isClinic) ...[
             const _ArticleSection(
@@ -516,6 +543,54 @@ class _DawaPregnancyGuideDetailPageState
           ],
         ],
       ),
+    );
+  }
+}
+
+/// Shows a calm acknowledgement only after a persisted learning transition.
+///
+/// A lesson can be complete without carrying a points reward, so the points
+/// treatment is intentionally omitted unless the saved balance increased.
+class _DawaLearningCompletionFeedback extends StatelessWidget {
+  const _DawaLearningCompletionFeedback({
+    required this.before,
+    required this.after,
+    required this.contentId,
+    required this.completedTitle,
+    required this.completedMessage,
+    required this.alreadyCompletedMessage,
+  });
+
+  final DawaLearningState before;
+  final DawaLearningState after;
+  final String contentId;
+  final String completedTitle;
+  final String completedMessage;
+  final String alreadyCompletedMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    final wasCompleted = before.completedIds.contains(contentId);
+    final isCompleted = after.completedIds.contains(contentId);
+    final newlyCompleted = !wasCompleted && isCompleted;
+    final pointsChanged = after.coins > before.coins;
+
+    return Column(
+      key: ValueKey('learning-completion-feedback-$contentId-${after.coins}'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        DawaActionFeedback(
+          title: newlyCompleted ? completedTitle : 'Already completed',
+          message: newlyCompleted ? completedMessage : alreadyCompletedMessage,
+        ),
+        if (pointsChanged) ...[
+          const SizedBox(height: DawaSpacing.xs),
+          DawaPointsFeedback(
+            previousPoints: before.coins,
+            currentPoints: after.coins,
+          ),
+        ],
+      ],
     );
   }
 }
@@ -580,7 +655,8 @@ class DawaMythFactPage extends StatefulWidget {
 class _DawaMythFactPageState extends State<DawaMythFactPage> {
   late final DawaLearningRepository _repository;
   late Future<DawaLearningState> _state;
-  bool? _knewThis;
+  DawaLearningState? _completionBefore;
+  DawaLearningState? _completionAfter;
 
   @override
   void initState() {
@@ -589,12 +665,13 @@ class _DawaMythFactPageState extends State<DawaMythFactPage> {
     _state = _repository.load();
   }
 
-  Future<void> _respond(bool knew, DawaLearningState state) async {
+  Future<void> _respond(DawaLearningState state) async {
     final next =
         await _repository.complete(state, 'myth-vs-fact', rewardCoins: 5);
     if (!mounted) return;
     setState(() {
-      _knewThis = knew;
+      _completionBefore = state;
+      _completionAfter = next;
       _state = Future.value(next);
     });
   }
@@ -612,14 +689,8 @@ class _DawaMythFactPageState extends State<DawaMythFactPage> {
               child: Column(
                 children: [
                   const DawaStatusPill(
-                    label: 'Lesson 2 of 8',
+                    label: 'SHORT LESSON',
                     icon: Icons.menu_book_outlined,
-                    color: DawaColors.green,
-                  ),
-                  const SizedBox(height: 12),
-                  const DawaProgressBar(
-                    value: 0.25,
-                    semanticLabel: 'Lesson progress',
                     color: DawaColors.green,
                   ),
                   const SizedBox(height: 20),
@@ -682,13 +753,15 @@ class _DawaMythFactPageState extends State<DawaMythFactPage> {
               future: _state,
               builder: (context, snapshot) {
                 final state = snapshot.data ?? const DawaLearningState();
+                final completed = state.completedIds.contains('myth-vs-fact');
                 return Row(
                   children: [
                     Expanded(
                       child: OutlinedButton.icon(
                         onPressed:
-                            snapshot.connectionState == ConnectionState.done
-                                ? () => _respond(true, state)
+                            snapshot.connectionState == ConnectionState.done &&
+                                    !completed
+                                ? () => _respond(state)
                                 : null,
                         icon: const Icon(Icons.headphones_outlined),
                         label: const Text('I’ve heard this'),
@@ -698,8 +771,9 @@ class _DawaMythFactPageState extends State<DawaMythFactPage> {
                     Expanded(
                       child: OutlinedButton.icon(
                         onPressed:
-                            snapshot.connectionState == ConnectionState.done
-                                ? () => _respond(false, state)
+                            snapshot.connectionState == ConnectionState.done &&
+                                    !completed
+                                ? () => _respond(state)
                                 : null,
                         icon: const Icon(Icons.lightbulb_outline_rounded),
                         label: const Text('I didn’t know this'),
@@ -709,25 +783,17 @@ class _DawaMythFactPageState extends State<DawaMythFactPage> {
                 );
               },
             ),
-            if (_knewThis != null) ...[
+            if (_completionBefore != null && _completionAfter != null) ...[
               const SizedBox(height: 12),
-              DawaCard(
-                color: DawaColors.softGreen,
-                borderColor: DawaColors.green.withValues(alpha: 0.3),
-                child: Row(
-                  children: [
-                    const Icon(Icons.check_circle, color: DawaColors.green),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        _knewThis!
-                            ? 'Great. This lesson is now marked complete.'
-                            : 'You learned something new and earned 5 coins.',
-                        style: context.dawaBody,
-                      ),
-                    ),
-                  ],
-                ),
+              _DawaLearningCompletionFeedback(
+                before: _completionBefore!,
+                after: _completionAfter!,
+                contentId: 'myth-vs-fact',
+                completedTitle: 'Lesson completed',
+                completedMessage:
+                    'Your response is saved and this lesson is now part of your learning progress.',
+                alreadyCompletedMessage:
+                    'This lesson was already marked complete. You can return to it whenever you want.',
               ),
             ],
             const SizedBox(height: 12),
@@ -775,6 +841,8 @@ class _DawaAudioLessonPageState extends State<DawaAudioLessonPage> {
   late final VoiceService _voiceService;
   late final DawaLearningRepository _repository;
   late Future<DawaLearningState> _state;
+  DawaLearningState? _completionBefore;
+  DawaLearningState? _completionAfter;
   bool _playing = false;
   bool _showTranscript = true;
   String _language = 'English';
@@ -789,6 +857,36 @@ class _DawaAudioLessonPageState extends State<DawaAudioLessonPage> {
   String get _transcript =>
       dawaPregnancyBasicsTranscripts[_language] ??
       dawaPregnancyBasicsTranscripts['English']!;
+
+  /// The language the transcript is really written in. If the selected
+  /// language has no translation yet, the English text is shown and must also
+  /// be SPOKEN in English.
+  String get _spokenLanguage =>
+      dawaPregnancyBasicsTranscripts.containsKey(_language)
+          ? _language
+          : 'English';
+
+  /// Plays the pre-generated Mansa recording bundled with the app. If there is
+  /// no file for this language, falls back to live synthesis of the same text.
+  Future<void> _playLesson() async {
+    final language = _spokenLanguage;
+    final path =
+        'assets/audios/lessons/pregnancy_basics_${language.toLowerCase()}.mp3';
+
+    Uint8List? bytes;
+    try {
+      final data = await rootBundle.load(path);
+      bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    } catch (_) {
+      debugPrint('No bundled lesson audio for "$language", using live TTS.');
+    }
+
+    if (bytes != null) {
+      await _voiceService.playAudio(bytes);
+      return;
+    }
+    await _voiceService.speakText(_transcript, language);
+  }
 
   @override
   void initState() {
@@ -812,14 +910,20 @@ class _DawaAudioLessonPageState extends State<DawaAudioLessonPage> {
     }
     setState(() => _playing = true);
     try {
-      await _voiceService.speakText(
-        _transcript,
-        _language,
-      );
+      await _playLesson();
       final state = await _state;
       final next =
           await _repository.complete(state, 'pregnancy-basics', rewardCoins: 5);
-      if (mounted) setState(() => _state = Future.value(next));
+      if (mounted) {
+        setState(() {
+          _completionBefore = state;
+          _completionAfter = next;
+          _state = Future.value(next);
+        });
+      }
+      if (next.coins > state.coins) {
+        unawaited(DawaFeedbackEffects.learningAwardConfirmed());
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -930,6 +1034,19 @@ class _DawaAudioLessonPageState extends State<DawaAudioLessonPage> {
                 ],
               ),
             ),
+            if (_completionBefore != null && _completionAfter != null) ...[
+              const SizedBox(height: 14),
+              _DawaLearningCompletionFeedback(
+                before: _completionBefore!,
+                after: _completionAfter!,
+                contentId: 'pregnancy-basics',
+                completedTitle: 'Audio lesson completed',
+                completedMessage:
+                    'This audio lesson is saved in your learning progress.',
+                alreadyCompletedMessage:
+                    'This audio lesson was already saved in your learning progress.',
+              ),
+            ],
             const SizedBox(height: 14),
             const DawaSectionHeader(title: 'Listen in your language'),
             const SizedBox(height: 8),

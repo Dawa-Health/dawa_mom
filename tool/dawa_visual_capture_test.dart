@@ -1,6 +1,7 @@
 import 'package:dawa_mom/backend/period_tracker_service.dart';
 import 'package:dawa_mom/components/responsive/dawa_mom_responsive_shell.dart';
 import 'package:dawa_mom/components/responsive/responsive_home_dashboard.dart';
+import 'package:dawa_mom/components/period_setup/period_setup_flow.dart';
 import 'package:dawa_mom/design_system/dawa_components.dart';
 import 'package:dawa_mom/design_system/dawa_design_tokens.dart';
 import 'package:dawa_mom/design_system/dawa_page_scaffold.dart';
@@ -24,6 +25,7 @@ import 'package:dawa_mom/features/notifications/dawa_notifications_page.dart';
 import 'package:dawa_mom/features/onboarding/dawa_main_app_tour.dart';
 import 'package:dawa_mom/features/onboarding/dawa_onboarding_page.dart';
 import 'package:dawa_mom/features/period_tracker/presentation/dawa_cycle_tracker_page.dart';
+import 'package:dawa_mom/features/period_tracker/presentation/dawa_daily_check_in_sheet.dart';
 import 'package:dawa_mom/features/preferences/dawa_language_sheet.dart';
 import 'package:dawa_mom/features/preferences/dawa_user_preferences_repository.dart';
 import 'package:dawa_mom/features/profile/data/health_profile_repository.dart';
@@ -32,6 +34,7 @@ import 'package:dawa_mom/features/rewards/presentation/dawa_rewards_page.dart';
 import 'package:dawa_mom/features/settings/dawa_mom_settings_page.dart';
 import 'package:dawa_mom/navbar/appointments/appointment_details/appointment_details_widget.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -40,10 +43,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 const _captureKey = ValueKey('visual-capture');
 
 const _captureSizes = <String, Size>{
+  '320x568': Size(320, 568),
   '360x800': Size(360, 800),
   '390x844': Size(390, 844),
+  '400x793': Size(400, 793),
   '412x915': Size(412, 915),
-  'tablet-portrait': Size(768, 1024),
+  '430x932': Size(430, 932),
+  '768x1024': Size(768, 1024),
 };
 
 const _destinations = <DawaMomShellDestination>[
@@ -114,6 +120,19 @@ void main() {
       ..addFont(rootBundle.load('assets/fonts/Poppins-Medium.ttf'))
       ..addFont(rootBundle.load('assets/fonts/Poppins-SemiBold.ttf'));
     await loader.load();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('com.llfbandit.record/messages'),
+      (call) async => switch (call.method) {
+        'hasPermission' ||
+        'isPaused' ||
+        'isRecording' ||
+        'isEncoderSupported' =>
+          false,
+        'listInputDevices' => <Object?>[],
+        _ => null,
+      },
+    );
   });
 
   setUp(() {
@@ -191,6 +210,36 @@ void main() {
           profileRepository: _FakeHealthProfileRepository(),
         ),
       ),
+    );
+    await _captureMatrix(
+      tester,
+      'track-pregnancy-setup.png',
+      () => _shell(
+        index: 1,
+        child: DawaCycleTrackerPage(
+          service: _FakePeriodTrackerService(),
+          profileRepository: _FakeCycleHealthProfileRepository(),
+        ),
+      ),
+      afterPump: (tester) async {
+        await tester.tap(find.byKey(const ValueKey('track-mode-1')));
+        await tester.pumpAndSettle();
+      },
+    );
+    await _captureMatrix(
+      tester,
+      'track-pregnancy.png',
+      () => _shell(
+        index: 1,
+        child: DawaCycleTrackerPage(
+          service: _FakePeriodTrackerService(),
+          profileRepository: _FakeHealthProfileRepository(),
+        ),
+      ),
+      afterPump: (tester) async {
+        await tester.tap(find.byKey(const ValueKey('track-mode-1')));
+        await tester.pumpAndSettle();
+      },
     );
     await _captureMatrix(
       tester,
@@ -673,6 +722,87 @@ void main() {
     );
   });
 
+  testWidgets('capture clinic, support and account overlays', (tester) async {
+    await _captureMatrix(
+      tester,
+      'clinic-details-sheet.png',
+      () => _shell(
+        index: 2,
+        child: DawaCarePage(
+          initialAppointments: [_appointment()],
+          initialClinics: _captureClinics,
+        ),
+      ),
+      afterPump: (tester) async {
+        await tester.tap(find.byKey(const ValueKey('care-tab-clinics')));
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.text('View clinic').first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('View clinic').first);
+        await tester.pumpAndSettle();
+        expect(find.text('Book at this clinic'), findsOneWidget);
+      },
+    );
+    await _captureMatrix(
+      tester,
+      'support-sheet.png',
+      () => _shell(
+        index: 4,
+        child: DawaMomSettingsPage(
+          profileRepository: _FakeHealthProfileRepository(),
+        ),
+      ),
+      afterPump: (tester) async {
+        await tester.ensureVisible(find.text('Help & support'));
+        await tester.tap(find.text('Help & support'));
+        await tester.pumpAndSettle();
+      },
+    );
+    await _captureMatrix(
+      tester,
+      'delete-account-dialog.png',
+      () => Builder(
+        builder: (context) => Scaffold(
+          body: Center(
+            child: FilledButton(
+              onPressed: () => showDialog<bool>(
+                context: context,
+                builder: (_) => const DeleteAccountConfirmationDialog(),
+              ),
+              child: const Text('Delete account'),
+            ),
+          ),
+        ),
+      ),
+      afterPump: (tester) async {
+        await tester.tap(find.text('Delete account'));
+        await tester.pumpAndSettle();
+      },
+    );
+    await _captureMatrix(
+      tester,
+      'period-setup-dialog.png',
+      () => Builder(
+        builder: (context) => Scaffold(
+          body: Center(
+            child: FilledButton(
+              onPressed: () => showPeriodSetupFlow(
+                context,
+                service: _FakePeriodTrackerService(),
+              ),
+              child: const Text('Set up cycle'),
+            ),
+          ),
+        ),
+      ),
+      afterPump: (tester) async {
+        await tester.tap(find.text('Set up cycle'));
+        await tester.pumpAndSettle();
+        expect(find.text('Period Tracker setup'), findsOneWidget);
+      },
+    );
+  });
+
   testWidgets('capture reward redemption modal', (tester) async {
     final prefs = await SharedPreferences.getInstance();
     await _captureMatrix(
@@ -718,14 +848,40 @@ Future<void> _captureMatrix(
     await _pump(tester, builder(), size: entry.value);
     if (afterPump != null) await afterPump(tester);
     await _precacheImages(tester);
-    expect(
-      tester.takeException(),
-      isNull,
-      reason: '$name failed at ${entry.value}',
-    );
+    final failure = tester.takeException();
+    if (failure != null) _debugOverflowingFlexes(tester);
+    expect(failure, isNull, reason: '$name failed at ${entry.value}');
     await _capture(tester, '${entry.key}/$name');
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
+  }
+}
+
+void _debugOverflowingFlexes(WidgetTester tester) {
+  for (final element in tester.allElements) {
+    final renderObject = element.renderObject;
+    if (renderObject is! RenderFlex || !renderObject.hasSize) continue;
+    final bounds = renderObject.localToGlobal(Offset.zero) & renderObject.size;
+    var outside = false;
+    renderObject.visitChildren((child) {
+      if (child is! RenderBox || !child.hasSize) return;
+      final childBounds = child.localToGlobal(Offset.zero) & child.size;
+      outside = outside ||
+          childBounds.left < bounds.left - .1 ||
+          childBounds.right > bounds.right + .1 ||
+          childBounds.top < bounds.top - .1 ||
+          childBounds.bottom > bounds.bottom + .1;
+    });
+    if (!outside) continue;
+    debugPrint(
+      'Overflow candidate ${element.widget.runtimeType} '
+      '${renderObject.direction} $bounds',
+    );
+    renderObject.visitChildren((child) {
+      if (child is! RenderBox || !child.hasSize) return;
+      final childBounds = child.localToGlobal(Offset.zero) & child.size;
+      debugPrint('  ${child.runtimeType}: $childBounds');
+    });
   }
 }
 
@@ -1177,6 +1333,25 @@ class _FakeAppointmentRepository extends AppointmentRepository {
 }
 
 class _FakeHealthProfileRepository implements HealthProfileRepository {
+  @override
+  Future<HealthProfilePersonalSave> savePersonalInformation({
+    required String name,
+    required DateTime dateOfBirth,
+    required String phone,
+    required String address,
+    String? occupation,
+  }) async =>
+      HealthProfilePersonalSave(
+        profile: {'display_name': name, 'phone_number': phone},
+        mother: {
+          'name': name,
+          'phone_number': phone,
+          'date_of_birth': dateOfBirth.toIso8601String(),
+          'address': address,
+          'occupation': occupation,
+        },
+      );
+
   @override
   Future<HealthProfileSnapshot> load() async => _healthProfile();
 

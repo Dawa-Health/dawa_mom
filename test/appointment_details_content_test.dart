@@ -1,5 +1,6 @@
 import 'package:dawa_mom/features/appointments/domain/appointment.dart';
 import 'package:dawa_mom/features/appointments/domain/appointment_result_summary.dart';
+import 'package:dawa_mom/features/payments/data/lipila_payment_repository.dart';
 import 'package:dawa_mom/navbar/appointments/appointment_details/appointment_details_widget.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -127,9 +128,202 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('paid appointment shows paid separately from confirmation',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.light(),
+        home: Scaffold(
+          body: AppointmentDetailsContent(
+            appointment: _appointment('pending'),
+            payment: _payment('successful'),
+            resultLoading: false,
+            resultError: false,
+            cancelling: false,
+            onCancel: () {},
+            onRefresh: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Payment confirmed'), findsWidgets);
+    expect(find.text('Pending confirmation'), findsWidgets);
+    expect(find.text('Payment processing'), findsNothing);
+  });
+
+  testWidgets('cash appointment shows payment due at clinic', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.light(),
+        home: Scaffold(
+          body: AppointmentDetailsContent(
+            appointment: _appointment('pending', paymentMethod: 'cash'),
+            resultLoading: false,
+            resultError: false,
+            cancelling: false,
+            onCancel: () {},
+            onRefresh: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pay at clinic'), findsOneWidget);
+    expect(find.textContaining('Payment failed'), findsNothing);
+    expect(find.text('Pending confirmation'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('pending payment explains the next step without false failure',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(360, 800);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.light(),
+        home: Scaffold(
+          body: AppointmentDetailsContent(
+            appointment: _appointment('pending'),
+            payment: _payment('pending'),
+            resultLoading: false,
+            resultError: false,
+            cancelling: false,
+            onCancel: () {},
+            onRefresh: () async {},
+            onRefreshPayment: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Payment pending'), findsOneWidget);
+    expect(find.text('Waiting for payment'), findsOneWidget);
+    expect(find.text('Check again'), findsOneWidget);
+    expect(find.text('Pending confirmation'), findsWidgets);
+    expect(find.textContaining('Payment failed'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('failed payment offers a retry while preserving appointment',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(360, 800);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.light(),
+        home: Scaffold(
+          body: AppointmentDetailsContent(
+            appointment: _appointment('pending'),
+            payment: _payment('failed'),
+            resultLoading: false,
+            resultError: false,
+            cancelling: false,
+            onCancel: () {},
+            onRefresh: () async {},
+            onRetryPayment: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Payment failed'), findsOneWidget);
+    expect(find.text("Payment wasn't completed"), findsOneWidget);
+    expect(find.text('Try payment again'), findsOneWidget);
+    expect(find.text('Pending confirmation'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('synced cancelled appointment does not show a sync warning',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.light(),
+        home: Scaffold(
+          body: AppointmentDetailsContent(
+            appointment: _appointment(
+              'cancelled',
+              integrationStatus: 'synced',
+            ),
+            resultLoading: false,
+            resultError: false,
+            cancelling: false,
+            onCancel: () {},
+            onRefresh: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Cancelled'), findsOneWidget);
+    expect(find.textContaining('Cancellation pending'), findsNothing);
+    expect(find.textContaining('clinic connection'), findsNothing);
+    expect(find.text('Visit details'), findsOneWidget);
+  });
+
+  testWidgets('cancelled appointment shows its pending sync separately',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.light(),
+        home: Scaffold(
+          body: AppointmentDetailsContent(
+            appointment: _appointment(
+              'cancelled',
+              integrationStatus: 'queued',
+            ),
+            resultLoading: false,
+            resultError: false,
+            cancelling: false,
+            onCancel: () {},
+            onRefresh: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Cancelled'), findsOneWidget);
+    expect(find.text('Cancellation pending sync'), findsOneWidget);
+    expect(find.text("We'll update the clinic when you're connected."),
+        findsOneWidget);
+    expect(find.textContaining('retried safely'), findsNothing);
+  });
 }
 
-Appointment _appointment(String status, {DateTime? date}) => Appointment(
+Appointment _appointment(
+  String status, {
+  DateTime? date,
+  String paymentMethod = 'online',
+  String? integrationStatus,
+}) =>
+    Appointment(
       id: '00000000-0000-4000-8000-000000000001',
       motherId: '00000000-0000-4000-8000-000000000002',
       patientId: '00000000-0000-4000-8000-000000000003',
@@ -142,7 +336,8 @@ Appointment _appointment(String status, {DateTime? date}) => Appointment(
       status: status,
       source: 'dawa_mom',
       createdAt: DateTime(2026, 7, 20, 14, 12),
-      integrationStatus: status == 'completed' ? 'synced' : 'pending',
+      integrationStatus:
+          integrationStatus ?? (status == 'completed' ? 'synced' : 'pending'),
       reason: 'Pregnancy confirmation',
       notes: 'Please bring previous test results.',
       clinicianName: 'Dr Fae',
@@ -150,6 +345,18 @@ Appointment _appointment(String status, {DateTime? date}) => Appointment(
       clinicianSpeciality: 'Maternal health',
       clinicName: 'DawaMom Clinic',
       clinicAddress: 'Lusaka',
+      paymentMethod: paymentMethod,
+    );
+
+LipilaPaymentRecord _payment(String status) => LipilaPaymentRecord(
+      id: 'payment-id',
+      status: status,
+      amount: 150,
+      currency: 'ZMW',
+      referenceId: 'dawa-reference',
+      paymentMethod: 'mobile_money',
+      provider: 'lipila',
+      createdAt: DateTime(2026, 7, 20, 14, 12),
     );
 
 AppointmentResultSummary _summary() => AppointmentResultSummary(

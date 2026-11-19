@@ -8,8 +8,9 @@ import '/auth/supabase_auth/auth_util.dart';
 import '/backend/backend.dart';
 import '/components/responsive/responsive_layout.dart';
 import '/design_system/dawa_components.dart';
+import '/design_system/dawa_design_tokens.dart';
+import '/design_system/dawa_interactions.dart';
 import '/features/profile/data/health_profile_repository.dart';
-import '/flutter_flow/flutter_flow_theme.dart';
 
 class EditProfileWidget extends StatefulWidget {
   const EditProfileWidget({super.key, this.motherDets});
@@ -33,7 +34,7 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
 
   late Future<void> _loading;
   DateTime? _dateOfBirth;
-  String? _motherId;
+  late final HealthProfileRepository _repository;
   bool _saving = false;
   bool _submitted = false;
   String? _loadError;
@@ -42,6 +43,7 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
   @override
   void initState() {
     super.initState();
+    _repository = HealthProfileRepository();
     _loading = _load();
   }
 
@@ -83,7 +85,6 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
       final mother = results[1] == null
           ? <String, dynamic>{}
           : Map<String, dynamic>.from(results[1] as Map);
-      _motherId = mother['id']?.toString();
       _name.text = _firstText([mother['name'], profile['display_name']]);
       _email.text = _firstText([profile['email'], currentUserEmail]);
       _phone.text = _firstText([
@@ -137,47 +138,25 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
     setState(() => _saving = true);
     try {
       if (kDebugMode) debugPrint('[HealthProfile] Saving personal profile.');
-      final client = Supabase.instance.client;
-      final name = _name.text.trim();
-      final phone = _phone.text.trim();
-      await SupabaseDatabase.instance.runWithFreshSession(
-        () => client.from('profiles').update({
-          'display_name': name,
-          'phone_number': phone,
-        }).eq('id', userId),
+      final saved = await _repository.savePersonalInformation(
+        name: _name.text,
+        dateOfBirth: _dateOfBirth!,
+        phone: _phone.text,
+        occupation: _occupation.text,
+        address: _address.text,
       );
-      final motherData = {
-        'profile_id': userId,
-        'name': name,
-        'phone_number': phone,
-        'date_of_birth': _dateId(_dateOfBirth!),
-        'occupation': _nullIfBlank(_occupation.text),
-        'address': _address.text.trim(),
-      };
-      if (_motherId == null) {
-        final inserted = await SupabaseDatabase.instance.runWithFreshSession(
-          () => client
-              .from('mothers')
-              .insert({
-                'id': userId,
-                ...motherData,
-              })
-              .select('id')
-              .single(),
-        );
-        _motherId = inserted['id'].toString();
-      } else {
-        await SupabaseDatabase.instance.runWithFreshSession(
-          () => client.from('mothers').update(motherData).eq('id', _motherId!),
-        );
-      }
-      HealthProfileRepository.notifyChanged();
       if (kDebugMode) debugPrint('[HealthProfile] Personal profile saved.');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Profile updated successfully.')),
       );
-      Navigator.pop(context, true);
+      Navigator.pop(context, saved);
+    } on HealthProfileException catch (error) {
+      if (mounted) {
+        setState(() {
+          _saveError = error.message;
+        });
+      }
     } catch (_) {
       if (mounted) {
         setState(() {
@@ -191,14 +170,13 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = FlutterFlowTheme.of(context);
     return Scaffold(
-      backgroundColor: theme.primaryBackground,
+      backgroundColor: DawaColors.canvas,
       appBar: AppBar(
         elevation: 0,
-        backgroundColor: theme.primaryBackground,
-        foregroundColor: theme.primaryText,
-        title: const Text('Edit profile'),
+        backgroundColor: DawaColors.canvas,
+        foregroundColor: DawaColors.ink,
+        title: Text('Edit profile', style: context.dawaTitle),
       ),
       body: FutureBuilder<void>(
         future: _loading,
@@ -237,15 +215,13 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
                       children: [
                         Text(
                           'Personal information',
-                          style: theme.headlineSmall.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
+                          style: context.dawaTitle,
                         ),
                         const SizedBox(height: 6),
                         Text(
                           'Keep your details correct for visits and health tips.',
-                          style: theme.bodyMedium.copyWith(
-                            color: theme.secondaryText,
+                          style: context.dawaBody.copyWith(
+                            color: DawaColors.textSecondary,
                           ),
                         ),
                         const SizedBox(height: 20),
@@ -260,7 +236,6 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
                               decoration: InputDecoration(
                                 labelText: 'Full name',
                                 prefixIcon: Icon(Icons.person_outline_rounded),
-                                border: OutlineInputBorder(),
                               ),
                               validator: (value) =>
                                   (value?.trim().length ?? 0) < 2
@@ -277,13 +252,13 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
                                   color: Colors.transparent,
                                   child: InkWell(
                                     onTap: _saving ? null : _pickDateOfBirth,
-                                    borderRadius: BorderRadius.circular(4),
+                                    borderRadius:
+                                        BorderRadius.circular(DawaRadii.medium),
                                     child: InputDecorator(
                                       decoration: InputDecoration(
                                         prefixIcon: const Icon(
                                           Icons.calendar_today_outlined,
                                         ),
-                                        border: const OutlineInputBorder(),
                                         errorText:
                                             _submitted && _dateOfBirth == null
                                                 ? 'Choose your date of birth.'
@@ -308,7 +283,6 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
                               decoration: InputDecoration(
                                 labelText: 'Occupation (optional)',
                                 prefixIcon: Icon(Icons.work_outline_rounded),
-                                border: OutlineInputBorder(),
                               ),
                             ),
                           ],
@@ -325,7 +299,6 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
                                 helperText:
                                     'Your sign-in email is managed securely.',
                                 prefixIcon: Icon(Icons.email_outlined),
-                                border: OutlineInputBorder(),
                               ),
                             ),
                             const SizedBox(height: 14),
@@ -343,7 +316,6 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
                               decoration: InputDecoration(
                                 labelText: 'Mobile number',
                                 prefixIcon: Icon(Icons.phone_outlined),
-                                border: OutlineInputBorder(),
                               ),
                               validator: (value) {
                                 final digits =
@@ -364,7 +336,6 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
                                 labelText: 'Address',
                                 alignLabelWithHint: true,
                                 prefixIcon: Icon(Icons.location_on_outlined),
-                                border: OutlineInputBorder(),
                               ),
                               validator: (value) =>
                                   (value?.trim().length ?? 0) < 3
@@ -377,29 +348,20 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
                           const SizedBox(height: 16),
                           Semantics(
                             liveRegion: true,
-                            child: Text(
-                              _saveError!,
-                              style: TextStyle(color: theme.error),
+                            child: DawaActionFeedback(
+                              title: 'Changes not saved',
+                              message: _saveError!,
+                              tone: DawaFeedbackTone.error,
                             ),
                           ),
                         ],
                         const SizedBox(height: 22),
-                        FilledButton.icon(
+                        DawaPrimaryButton(
                           key: const ValueKey('save-profile'),
                           onPressed: _saving ? null : _save,
-                          icon: _saving
-                              ? const SizedBox.square(
-                                  dimension: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.save_outlined),
-                          label: Text(_saving ? 'Saving...' : 'Save changes'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: theme.primary,
-                            minimumSize: const Size.fromHeight(50),
-                          ),
+                          busy: _saving,
+                          icon: Icons.save_outlined,
+                          label: 'Save changes',
                         ),
                         const SizedBox(height: 28),
                       ],
@@ -425,12 +387,6 @@ class _EditProfileWidgetState extends State<EditProfileWidget> {
   static String _firstText(List<dynamic> values) => values
       .map(_text)
       .firstWhere((value) => value.isNotEmpty, orElse: () => '');
-  static String _dateId(DateTime date) =>
-      '${date.year.toString().padLeft(4, '0')}-'
-      '${date.month.toString().padLeft(2, '0')}-'
-      '${date.day.toString().padLeft(2, '0')}';
-  static String? _nullIfBlank(String value) =>
-      value.trim().isEmpty ? null : value.trim();
 }
 
 class _FormSection extends StatelessWidget {
@@ -441,21 +397,20 @@ class _FormSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = FlutterFlowTheme.of(context);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: theme.secondaryBackground,
-        border: Border.all(color: theme.alternate),
-        borderRadius: BorderRadius.circular(16),
+        color: DawaColors.surface,
+        border: Border.all(color: DawaColors.line),
+        borderRadius: BorderRadius.circular(DawaRadii.medium),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             title,
-            style: theme.titleSmall.copyWith(fontWeight: FontWeight.w600),
+            style: context.dawaSectionTitle,
           ),
           const SizedBox(height: 16),
           ...children,

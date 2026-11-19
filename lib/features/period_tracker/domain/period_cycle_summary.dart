@@ -115,9 +115,8 @@ class PeriodCycleSummary {
     // within `[1, effectiveCycleLength]`, consistent with how `nextEstimate`
     // below already rolls forward cycle-by-cycle.
     final daysSinceStart = today.difference(lastStart).inDays;
-    final cycleDay = daysSinceStart < 0
-        ? null
-        : (daysSinceStart % effectiveCycleLength) + 1;
+    final cycleDay =
+        daysSinceStart < 0 ? null : (daysSinceStart % effectiveCycleLength) + 1;
 
     var nextEstimate = lastStart.add(Duration(days: effectiveCycleLength));
     while (nextEstimate.isBefore(today)) {
@@ -129,8 +128,12 @@ class PeriodCycleSummary {
     final periodEnd = explicitEnd == null
         ? expectedEnd
         : DateTime(explicitEnd.year, explicitEnd.month, explicitEnd.day);
-    final periodActive =
-        !today.isBefore(lastStart) && !today.isAfter(periodEnd);
+    // An explicit end is a confirmed user action. Treat it as closed
+    // immediately, including when it is logged for today, so the tracker does
+    // not keep offering "End period" after a successful save.
+    final periodActive = explicitEnd == null &&
+        !today.isBefore(lastStart) &&
+        !today.isAfter(periodEnd);
 
     final confidence = isRegular != true || (variation != null && variation > 8)
         ? PeriodEstimateConfidence.low

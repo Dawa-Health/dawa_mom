@@ -22,6 +22,7 @@ import '/features/learning/presentation/dawa_visual_topic_pages.dart';
 import '/features/notifications/dawa_notifications_page.dart';
 import '/features/notifications/dawa_notification_preferences_page.dart';
 import '/features/onboarding/dawa_onboarding_page.dart';
+import '/features/preferences/dawa_app_preferences_page.dart';
 import '/features/rewards/presentation/dawa_rewards_page.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 
@@ -123,7 +124,7 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
           name: CreateAccountWidget.routeName,
           path: CreateAccountWidget.routePath,
           requireAuth: true,
-          builder: (context, params) => CreateAccountWidget(),
+          builder: (context, params) => const ProfileCompletionPage(),
         ),
         FFRoute(
           name: ProfileWidget.routeName,
@@ -267,6 +268,12 @@ GoRouter createRouter(AppStateNotifier appStateNotifier) => GoRouter(
           path: DawaNotificationPreferencesPage.routePath,
           requireAuth: true,
           builder: (context, params) => const DawaNotificationPreferencesPage(),
+        ),
+        FFRoute(
+          name: DawaAppPreferencesPage.routeName,
+          path: DawaAppPreferencesPage.routePath,
+          requireAuth: true,
+          builder: (context, params) => const DawaAppPreferencesPage(),
         ),
         FFRoute(
           name: DawaOnboardingPage.routeName,

@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import '/localization/dawa_localized_material.dart';
 import '/components/period_setup/period_setup_flow.dart';
 import '/design_system/dawa_components.dart';
 import '/design_system/dawa_design_tokens.dart';
+import '/design_system/dawa_interactions.dart';
 import '/design_system/dawa_page_scaffold.dart';
+import '/features/feedback/dawa_feedback_effects.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/navbar/edit_profile/edit_profile_widget.dart';
 import 'data/health_profile_repository.dart';
@@ -22,6 +26,9 @@ class _ProfileCompletionPageState extends State<ProfileCompletionPage> {
   late final HealthProfileRepository _repository;
   late Future<HealthProfileSnapshot> _profile;
   bool _retryingPatientSync = false;
+  bool _savingPregnancy = false;
+  _ProfileFeedback? _feedback;
+  final _feedbackKey = GlobalKey();
 
   @override
   void initState() {
@@ -30,15 +37,49 @@ class _ProfileCompletionPageState extends State<ProfileCompletionPage> {
     _profile = _repository.load();
   }
 
-  Future<void> _refresh() async {
+  Future<HealthProfileSnapshot> _refresh() async {
     final future = _repository.load();
-    setState(() => _profile = future);
-    await future;
+    setState(() {
+      _profile = future;
+    });
+    return future;
   }
 
-  Future<void> _editPersonal() async {
-    await context.pushNamed(EditProfileWidget.routeName);
-    if (mounted) await _refresh();
+  Future<void> _editPersonal(HealthProfileSnapshot before) async {
+    final result = await context.pushNamed(EditProfileWidget.routeName);
+    if (!mounted || result is! HealthProfilePersonalSave) return;
+    final savedSnapshot = before.copyWith(
+      profile: {...before.profile, ...result.profile},
+      mother: {...before.mother, ...result.mother},
+    );
+    setState(() {
+      _profile = Future.value(savedSnapshot);
+    });
+    HealthProfileSnapshot after = savedSnapshot;
+    var refreshUnavailable = false;
+    try {
+      after = await _repository.load();
+      if (mounted) {
+        setState(() {
+          _profile = Future.value(after);
+        });
+      }
+    } catch (_) {
+      refreshUnavailable = true;
+    }
+    if (!mounted) return;
+    _showFeedback(
+      before: before,
+      after: after,
+      title: after.isComplete && !before.isComplete
+          ? 'Your profile is ready'
+          : 'Your details are saved',
+      message: after.isComplete && !before.isComplete
+          ? 'Your health profile is ready. DawaMom can now show care and tips that fit you.'
+          : refreshUnavailable
+              ? 'Your details are saved. We will refresh the rest of your profile when you are connected.'
+              : 'Your personal details have been added to your health profile.',
+    );
   }
 
   Future<void> _setupPeriod(HealthProfileSnapshot data) async {
@@ -52,16 +93,35 @@ class _ProfileCompletionPageState extends State<ProfileCompletionPage> {
       initialIsRegular: data.periodSettings?['isRegular'] as bool? ?? true,
     );
     if (outcome != null && outcome != PeriodSetupOutcome.back && mounted) {
-      await _refresh();
+      final after = await _refresh();
+      if (!mounted || after.periodComplete == data.periodComplete) return;
+      _showFeedback(
+        before: data,
+        after: after,
+        title: after.isComplete && !data.isComplete
+            ? 'Profile complete'
+            : 'Period dates added',
+        message: after.isComplete && !data.isComplete
+            ? 'Your health profile is ready. You can change any answer when you need to.'
+            : 'Your cycle estimates can now use the period date you saved.',
+      );
     }
   }
 
   Future<void> _editPregnancy(HealthProfileSnapshot data) async {
+    // The pregnancy RPC correctly rejects users who do not yet have a mother
+    // record. Personal details creates that record, so make the prerequisite
+    // clear before opening a form that cannot be saved.
+    if (!data.hasMaternalProfile) {
+      _showPrerequisiteFeedback();
+      return;
+    }
     final result = await showDialog<_PregnancyResult>(
       context: context,
       builder: (context) => _PregnancyDialog(data: data),
     );
     if (result == null || !mounted) return;
+    setState(() => _savingPregnancy = true);
     try {
       await _repository.savePregnancyInformation(
         status: result.status,
@@ -69,19 +129,76 @@ class _ProfileCompletionPageState extends State<ProfileCompletionPage> {
         estimatedDueDate: result.estimatedDueDate,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pregnancy information saved.')),
+      final savedSnapshot = data.copyWith(
+        mother: {...data.mother, 'pregnancy_status': result.status},
+        pregnancy: result.status == 'pregnant'
+            ? {
+                'lnmp': result.lastMenstrualPeriod?.toIso8601String(),
+                'estimated_due_date':
+                    result.estimatedDueDate?.toIso8601String(),
+              }
+            : null,
+        clearPregnancy: result.status != 'pregnant',
       );
-      await _refresh();
-    } catch (_) {
+      setState(() {
+        _profile = Future.value(savedSnapshot);
+      });
+      HealthProfileSnapshot after = savedSnapshot;
+      var refreshUnavailable = false;
+      try {
+        after = await _repository.load();
+        if (mounted) {
+          setState(() {
+            _profile = Future.value(after);
+          });
+        }
+      } catch (_) {
+        refreshUnavailable = true;
+      }
+      if (!mounted) return;
+      final detailsReady = after.pregnancyWeek != null ||
+          after.estimatedDueDate != null ||
+          after.lastMenstrualPeriod != null;
+      _showFeedback(
+        before: data,
+        after: after,
+        title: after.isComplete && !data.isComplete
+            ? 'Profile complete'
+            : result.status == 'pregnant'
+                ? 'Pregnancy details added'
+                : 'Pregnancy choice saved',
+        message: after.isComplete && !data.isComplete
+            ? 'Your health profile is ready. DawaMom can now show care and tips that fit you.'
+            : detailsReady
+                ? 'Your current week, trimester, and due-date details are now ready.'
+                : refreshUnavailable
+                    ? 'Your pregnancy choice is saved. We will refresh the rest of your profile when you are connected.'
+                    : 'Your pregnancy choice has been saved. Add dates later if you want week and due-date details.',
+      );
+    } on HealthProfileException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[HealthProfile] operation=save_pregnancy stage=profile_ui '
+        'error_type=${error.runtimeType}',
+      );
+      debugPrintStack(
+        label: '[HealthProfile] save_pregnancy/profile_ui',
+        stackTrace: stackTrace,
+        maxFrames: 5,
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Pregnancy information could not be saved. Please try again.',
-          ),
+              'Pregnancy information could not be saved. Please try again.'),
         ),
       );
+    } finally {
+      if (mounted) setState(() => _savingPregnancy = false);
     }
   }
 
@@ -111,6 +228,55 @@ class _ProfileCompletionPageState extends State<ProfileCompletionPage> {
     } finally {
       if (mounted) setState(() => _retryingPatientSync = false);
     }
+  }
+
+  void _showFeedback({
+    required HealthProfileSnapshot before,
+    required HealthProfileSnapshot after,
+    required String title,
+    required String message,
+  }) {
+    if (!mounted) return;
+    unawaited(DawaFeedbackEffects.profileStepSaved());
+    setState(
+      () => _feedback = _ProfileFeedback(
+        title: title,
+        message: message,
+        milestone: after.isComplete && !before.isComplete,
+      ),
+    );
+    // The acknowledgement is part of the page rather than a transient toast,
+    // so screen readers can announce it and the user can read it again. Bring
+    // it into view when a lower step initiated the save.
+    _revealFeedback();
+  }
+
+  void _showPrerequisiteFeedback() {
+    if (!mounted) return;
+    setState(
+      () => _feedback = const _ProfileFeedback(
+        title: 'Add your details first',
+        message:
+            'Add your name, date of birth, phone number, and address. Then you can save pregnancy information.',
+        milestone: false,
+        tone: DawaFeedbackTone.information,
+      ),
+    );
+    _revealFeedback();
+  }
+
+  void _revealFeedback() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final feedbackContext = _feedbackKey.currentContext;
+      if (mounted && feedbackContext != null) {
+        Scrollable.ensureVisible(
+          feedbackContext,
+          duration: DawaMotion.resolve(context, DawaMotion.standard),
+          curve: Curves.easeOutCubic,
+          alignment: .08,
+        );
+      }
+    });
   }
 
   @override
@@ -161,8 +327,8 @@ class _ProfileCompletionPageState extends State<ProfileCompletionPage> {
               status: data.personalComplete
                   ? _CompletionStatus.complete
                   : _CompletionStatus.incomplete,
-              actionLabel: data.personalComplete ? 'Check' : 'Add now',
-              onTap: _editPersonal,
+              actionLabel: data.personalComplete ? 'Edit' : 'Add',
+              onTap: () => _editPersonal(data),
             ),
             _CompletionCard(
               step: 2,
@@ -175,8 +341,8 @@ class _ProfileCompletionPageState extends State<ProfileCompletionPage> {
               status: data.contactComplete
                   ? _CompletionStatus.complete
                   : _CompletionStatus.incomplete,
-              actionLabel: data.contactComplete ? 'Check' : 'Add now',
-              onTap: _editPersonal,
+              actionLabel: data.contactComplete ? 'Edit' : 'Add',
+              onTap: () => _editPersonal(data),
             ),
             _CompletionCard(
               step: 3,
@@ -187,7 +353,7 @@ class _ProfileCompletionPageState extends State<ProfileCompletionPage> {
               status: data.pregnancyComplete
                   ? _CompletionStatus.complete
                   : _CompletionStatus.incomplete,
-              actionLabel: data.pregnancyComplete ? 'Check' : 'Choose now',
+              actionLabel: data.pregnancyComplete ? 'Edit' : 'Choose',
               onTap: () => _editPregnancy(data),
             ),
             _CompletionCard(
@@ -203,7 +369,7 @@ class _ProfileCompletionPageState extends State<ProfileCompletionPage> {
                   : data.periodWasSkipped
                       ? _CompletionStatus.skipped
                       : _CompletionStatus.incomplete,
-              actionLabel: data.periodComplete ? 'Update' : 'Add period',
+              actionLabel: data.periodComplete ? 'Edit' : 'Add period',
               onTap: () => _setupPeriod(data),
             ),
           ];
@@ -235,6 +401,26 @@ class _ProfileCompletionPageState extends State<ProfileCompletionPage> {
                   semanticLabel:
                       '${data.completedSections} of 4 profile steps done.',
                 ),
+                if (_feedback != null) ...[
+                  const SizedBox(height: DawaSpacing.sm),
+                  DawaActionFeedback(
+                    key: _feedbackKey,
+                    title: _feedback!.title,
+                    message: _feedback!.message,
+                    tone: _feedback!.tone,
+                    dismissLabel: 'Close',
+                    onDismiss: () => setState(() => _feedback = null),
+                  ),
+                ],
+                if (_savingPregnancy) ...[
+                  const SizedBox(height: DawaSpacing.sm),
+                  const DawaActionFeedback(
+                    title: 'Saving your details',
+                    message:
+                        'Please wait while we save your pregnancy information.',
+                    tone: DawaFeedbackTone.information,
+                  ),
+                ],
                 const SizedBox(height: DawaSpacing.md),
                 DawaCard(
                   child: Row(
@@ -324,6 +510,20 @@ class _ProfileCompletionPageState extends State<ProfileCompletionPage> {
         return 'Choose the answer that fits you.';
     }
   }
+}
+
+class _ProfileFeedback {
+  const _ProfileFeedback({
+    required this.title,
+    required this.message,
+    required this.milestone,
+    this.tone = DawaFeedbackTone.success,
+  });
+
+  final String title;
+  final String message;
+  final bool milestone;
+  final DawaFeedbackTone tone;
 }
 
 enum _CompletionStatus { complete, incomplete, skipped }
@@ -498,7 +698,6 @@ class _PregnancyDialogState extends State<_PregnancyDialog> {
                   initialValue: _status,
                   decoration: InputDecoration(
                     labelText: 'Pregnancy status',
-                    border: OutlineInputBorder(),
                   ),
                   items: const [
                     DropdownMenuItem(
@@ -550,11 +749,14 @@ class _PregnancyDialogState extends State<_PregnancyDialog> {
           ),
         ),
         actions: [
-          TextButton(
+          DawaTextButton(
+            label: 'Cancel',
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
           ),
-          FilledButton(
+          DawaPrimaryButton(
+            label: 'Save',
+            icon: Icons.check_rounded,
+            fullWidth: false,
             onPressed: () => Navigator.pop(
               context,
               _PregnancyResult(
@@ -563,7 +765,6 @@ class _PregnancyDialogState extends State<_PregnancyDialog> {
                 estimatedDueDate: _status == 'pregnant' ? _dueDate : null,
               ),
             ),
-            child: const Text('Save'),
           ),
         ],
       );

@@ -48,4 +48,20 @@ void main() {
 
     expect(saved.appNotification, isTrue);
   });
+
+  test('same-day reminder preference is preserved', () async {
+    final preferences = await SharedPreferences.getInstance();
+    final repository = DawaAppointmentReminderRepository(
+      preferences: preferences,
+    );
+
+    const value = DawaAppointmentReminder(
+      appointmentId: 'appointment-3',
+      daysBefore: 0,
+    );
+
+    await repository.save(value);
+
+    expect((await repository.load('appointment-3')).daysBefore, 0);
+  });
 }

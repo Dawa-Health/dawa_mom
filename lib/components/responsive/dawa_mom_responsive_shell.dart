@@ -432,88 +432,111 @@ class _MobileShell extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: DawaColors.canvas,
-      extendBody: false,
-      body: child,
-      bottomNavigationBar: CustomPaint(
-        painter: const DawaWavePainter(),
-        child: SafeArea(
-          minimum: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-          child: SizedBox(
-            height: DawaLayout.mobileNavigationHeight +
-                DawaLayout.mobileNavigationWaveClearance,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  height: DawaLayout.mobileNavigationHeight,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: DawaColors.surface,
-                      borderRadius: BorderRadius.circular(22),
-                      border: Border.all(color: DawaColors.line),
-                      boxShadow: DawaShadows.card,
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: BottomNavigationBar(
-                      currentIndex: currentIndex >= 0 &&
-                              currentIndex < destinations.length
-                          ? currentIndex
-                          : 0,
-                      onTap: onDestinationSelected,
-                      backgroundColor: DawaColors.surface,
-                      selectedItemColor: DawaColors.primary,
-                      unselectedItemColor: DawaColors.muted,
-                      selectedFontSize: 10,
-                      unselectedFontSize: 10,
-                      iconSize: 23,
-                      elevation: 0,
-                      showSelectedLabels: true,
-                      showUnselectedLabels: true,
-                      type: BottomNavigationBarType.fixed,
-                      items: destinations
-                          .asMap()
-                          .entries
-                          .map(
-                            (entry) => BottomNavigationBarItem(
-                              icon: KeyedSubtree(
-                                key:
-                                    _targetKey(navigationTargetKeys, entry.key),
+      extendBody: true,
+      body: DawaMobileNavigationInset(
+        bottom: DawaLayout.mobileNavigationHeight +
+            DawaLayout.mobileNavigationWaveClearance +
+            DawaLayout.mobileNavigationBottomMargin,
+        child: child,
+      ),
+      bottomNavigationBar: SafeArea(
+        minimum: const EdgeInsets.fromLTRB(
+          12,
+          0,
+          12,
+          DawaLayout.mobileNavigationBottomMargin,
+        ),
+        child: SizedBox(
+          height: DawaLayout.mobileNavigationHeight +
+              DawaLayout.mobileNavigationWaveClearance,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: DawaLayout.mobileNavigationHeight,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: DawaColors.surface,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: DawaColors.line),
+                    boxShadow: DawaShadows.floating,
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: BottomNavigationBar(
+                    currentIndex:
+                        currentIndex >= 0 && currentIndex < destinations.length
+                            ? currentIndex
+                            : 0,
+                    onTap: onDestinationSelected,
+                    backgroundColor: DawaColors.surface,
+                    selectedItemColor: DawaColors.primary,
+                    unselectedItemColor: DawaColors.muted,
+                    selectedFontSize: 10,
+                    unselectedFontSize: 10,
+                    iconSize: 23,
+                    elevation: 0,
+                    showSelectedLabels: true,
+                    showUnselectedLabels: true,
+                    type: BottomNavigationBarType.fixed,
+                    items: destinations
+                        .asMap()
+                        .entries
+                        .map(
+                          (entry) => BottomNavigationBarItem(
+                            icon: KeyedSubtree(
+                              key: _targetKey(navigationTargetKeys, entry.key),
+                              child: AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 240),
+                                switchInCurve: Curves.easeOutBack,
+                                transitionBuilder: (child, animation) =>
+                                    ScaleTransition(
+                                  scale: Tween<double>(begin: 0.5, end: 1)
+                                      .animate(animation),
+                                  child: FadeTransition(
+                                    opacity: animation,
+                                    child: child,
+                                  ),
+                                ),
                                 child: Icon(
                                   currentIndex == entry.key
                                       ? entry.value.selectedIcon
                                       : entry.value.icon,
+                                  key: ValueKey(
+                                    'nav-${entry.key}-'
+                                    '${currentIndex == entry.key}',
+                                  ),
                                 ),
                               ),
-                              label: context.tr(entry.value.label),
                             ),
-                          )
-                          .toList(),
-                    ),
+                            label: context.tr(entry.value.label),
+                          ),
+                        )
+                        .toList(),
                   ),
                 ),
-                if (rudoState == RudoPanelState.closed)
-                  Positioned(
-                    right: 4,
-                    top: 0,
-                    child: _RudoFloatingLauncher(
-                      onPressed: onOpenRudo,
-                      dimension: 46,
-                    ),
+              ),
+              if (rudoState == RudoPanelState.closed)
+                Positioned(
+                  right: 4,
+                  top: 0,
+                  child: _RudoFloatingLauncher(
+                    onPressed: onOpenRudo,
+                    dimension: 32,
                   ),
-                if (rudoState == RudoPanelState.minimized)
-                  Positioned(
-                    right: 4,
-                    top: 6,
-                    child: _RudoMinimizedLauncher(
-                      onOpen: onOpenRudo,
-                      onClose: onCloseRudo,
-                    ),
+                ),
+              if (rudoState == RudoPanelState.minimized)
+                Positioned(
+                  right: 4,
+                  top: 2,
+                  child: _RudoMinimizedLauncher(
+                    onOpen: onOpenRudo,
+                    onClose: onCloseRudo,
                   ),
-              ],
-            ),
+                ),
+            ],
           ),
         ),
       ),
@@ -606,10 +629,27 @@ class _TabletShell extends StatelessWidget {
                       (entry) => NavigationRailDestination(
                         icon: KeyedSubtree(
                           key: _targetKey(navigationTargetKeys, entry.key),
-                          child: Icon(
-                            currentIndex == entry.key
-                                ? entry.value.selectedIcon
-                                : entry.value.icon,
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 240),
+                            switchInCurve: Curves.easeOutBack,
+                            transitionBuilder: (child, animation) =>
+                                ScaleTransition(
+                              scale: Tween<double>(begin: 0.5, end: 1)
+                                  .animate(animation),
+                              child: FadeTransition(
+                                opacity: animation,
+                                child: child,
+                              ),
+                            ),
+                            child: Icon(
+                              currentIndex == entry.key
+                                  ? entry.value.selectedIcon
+                                  : entry.value.icon,
+                              key: ValueKey(
+                                'nav-${entry.key}-'
+                                '${currentIndex == entry.key}',
+                              ),
+                            ),
                           ),
                         ),
                         label: Text(entry.value.label),
@@ -761,42 +801,66 @@ class _SidebarItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = FlutterFlowTheme.of(context);
     final item = Material(
-      color:
-          selected ? theme.primary.withValues(alpha: 0.1) : Colors.transparent,
+      color: Colors.transparent,
       borderRadius: BorderRadius.circular(10),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        hoverColor: theme.primary.withValues(alpha: 0.06),
-        focusColor: theme.primary.withValues(alpha: 0.1),
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: collapsed ? 0 : 13,
-            vertical: 12,
-          ),
-          child: Row(
-            mainAxisAlignment:
-                collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
-            children: [
-              Icon(
-                selected ? destination.selectedIcon : destination.icon,
-                color: selected ? theme.primary : theme.secondaryText,
-                size: 23,
-              ),
-              if (!collapsed) ...[
-                const SizedBox(width: 13),
-                Expanded(
-                  child: Text(
-                    destination.label,
-                    style: TextStyle(
-                      color: selected ? theme.primary : theme.primaryText,
-                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                      fontFamily: 'Poppins',
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        decoration: BoxDecoration(
+          color: selected
+              ? theme.primary.withValues(alpha: 0.1)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          hoverColor: theme.primary.withValues(alpha: 0.06),
+          focusColor: theme.primary.withValues(alpha: 0.1),
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: collapsed ? 0 : 13,
+              vertical: 12,
+            ),
+            child: Row(
+              mainAxisAlignment: collapsed
+                  ? MainAxisAlignment.center
+                  : MainAxisAlignment.start,
+              children: [
+                AnimatedScale(
+                  scale: selected ? 1.12 : 1,
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutBack,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    transitionBuilder: (child, animation) =>
+                        FadeTransition(opacity: animation, child: child),
+                    child: Icon(
+                      selected ? destination.selectedIcon : destination.icon,
+                      key: ValueKey(
+                        'sidebar-${destination.icon}-$selected',
+                      ),
+                      color: selected ? theme.primary : theme.secondaryText,
+                      size: 23,
                     ),
                   ),
                 ),
+                if (!collapsed) ...[
+                  const SizedBox(width: 13),
+                  Expanded(
+                    child: Text(
+                      destination.label,
+                      style: TextStyle(
+                        color: selected ? theme.primary : theme.primaryText,
+                        fontWeight:
+                            selected ? FontWeight.w600 : FontWeight.w500,
+                        fontFamily: 'Poppins',
+                      ),
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

@@ -12,9 +12,21 @@ import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as supabase;
 
-// NOTE: requires the `record` package — add `record: ^5.1.2` (or latest) to
-// pubspec.yaml. Not previously a dependency; speech_to_text never exposes
-// raw audio bytes, only recognized text, so it can't feed Sahara's STT.
+// NOTE: requires the `record` package (pubspec.yaml has record: ^6.2.1).
+// speech_to_text never exposes raw audio bytes, only recognized text, so it
+// can't feed server-side STT.
+//
+// WEB NOTES:
+// - Browsers have no filesystem, so path_provider's getTemporaryDirectory()
+//   throws MissingPluginException on web. Every call to it is guarded by
+//   kIsWeb below.
+// - On web, `record` returns a blob: URL from stop() instead of a file path,
+//   and AAC is not supported, so we record WAV there.
+// - The recording on web is WAV, so every upload to the rudo-chat edge
+//   function MUST use `VoiceService.recordingMimeType` and
+//   `VoiceService.recordingExtension` for the MIME type and filename. Sending
+//   a hardcoded 'audio/mp4' / '.m4a' for WAV audio makes Mansa decode the
+//   bytes as AAC and return garbage (e.g. Arabic script for Shona speech).
 
 class VoiceService {
   VoiceService({
@@ -26,15 +38,51 @@ class VoiceService {
         _recorder = recorder ?? AudioRecorder();
 
   static const String ttsProvider = String.fromEnvironment('TTS_PROVIDER');
+
+  // Name of the deployed TTS edge function. It now runs Mansa TTS (the old
+  // Sahara code was replaced), but the build-time define keeps its old name
+  // so existing build configs still work. If you deployed the Mansa function
+  // under a new name (e.g. 'mansa-tts'), build with
+  //   --dart-define=SAHARA_TTS_EDGE_FUNCTION=mansa-tts
   static const String saharaTtsEdgeFunction = String.fromEnvironment(
     'SAHARA_TTS_EDGE_FUNCTION',
-    defaultValue: 'sahara-tts',
+    defaultValue: 'tts',
   );
 
   static const String omnivoiceApiUrl =
       String.fromEnvironment('OMNIVOICE_API_URL');
   static const String omnivoiceApiKey =
       String.fromEnvironment('OMNIVOICE_API_KEY');
+
+  /// Languages the Mansa TTS edge function can speak. Tonga and Lozi have no
+  /// Mansa voice, so they (and anything unknown) go straight to device TTS.
+  static const Set<String> mansaTtsLanguages = {
+    'english',
+    'shona',
+    'bemba',
+    'chinyanja',
+    'ndebele',
+  };
+
+  /// Sample rate and channel count for recorded speech. 16 kHz mono is what
+  /// speech models expect, and it makes a WAV about 5.5x smaller than the
+  /// 44.1 kHz stereo default (roughly 32 KB/s instead of 176 KB/s).
+  static const int recordingSampleRate = 16000;
+  static const int recordingChannels = 1;
+
+  /// Recordings smaller than this contain no speech (a bare WAV header is 44
+  /// bytes), so [stopRecording] returns null for them.
+  static const int minRecordingBytes = 2000;
+
+  /// MIME type of audio returned by [stopRecording]. Use this (and the
+  /// matching file extension) when uploading the bytes.
+  static String get recordingMimeType => kIsWeb ? 'audio/wav' : 'audio/mp4';
+
+  /// File extension matching [recordingMimeType].
+  static String get recordingExtension => kIsWeb ? 'wav' : 'm4a';
+
+  /// Filename to send with the upload, matching [recordingMimeType].
+  static String get recordingFilename => 'voice_note.$recordingExtension';
 
   final SpeechToText _speech = SpeechToText();
   final AudioRecorder _recorder;
@@ -47,22 +95,45 @@ class VoiceService {
   ValueChanged<String>? _onPartialResult;
   String? _recordingPath;
 
-  // ── Sahara-backed recording flow ──────────────────────────────────
-  // Records a real audio clip to disk (unlike speech_to_text, which never
-  // exposes raw bytes — only recognized text via the OS recognizer). The
+  // ── Recording flow ────────────────────────────────────────────────
+  // Records a real audio clip (unlike speech_to_text, which never
+  // exposes raw bytes - only recognized text via the OS recognizer). The
   // caller uploads the returned bytes to the rudo-chat edge function's
-  // audio_base64 path, which forwards to Sahara STT server-side.
+  // audio_base64 path, which forwards to Mansa STT server-side.
+  //
+  // Mobile/desktop: records to a temp file (m4a / AAC, 16 kHz mono).
+  // Web: records WAV in memory with the browser's default settings; stop()
+  // returns a blob: URL we fetch.
 
   Future<void> startRecording() async {
     final hasPermission = await _recorder.hasPermission();
     if (!hasPermission) {
       throw StateError('Microphone permission was not granted.');
     }
+
+    if (kIsWeb) {
+      // No filesystem on web. The recorder returns a blob URL on stop().
+      // AAC isn't supported by browsers; WAV is the safest for server-side STT.
+      _recordingPath = null;
+      // Plain wav config on purpose: forcing sampleRate / numChannels on web
+      // produced header-only (44 byte) recordings, so the browser's default
+      // capture settings are used and the server downsamples if needed.
+      await _recorder.start(
+        const RecordConfig(encoder: AudioEncoder.wav),
+        path: '',
+      );
+      return;
+    }
+
     final dir = await getTemporaryDirectory();
     _recordingPath =
         '${dir.path}/rudo_voice_note_${DateTime.now().microsecondsSinceEpoch}.m4a';
     await _recorder.start(
-      const RecordConfig(encoder: AudioEncoder.aacLc),
+      const RecordConfig(
+        encoder: AudioEncoder.aacLc,
+        sampleRate: recordingSampleRate,
+        numChannels: recordingChannels,
+      ),
       path: _recordingPath!,
     );
   }
@@ -77,16 +148,32 @@ class VoiceService {
     if (resolvedPath == null) {
       return null;
     }
+
+    if (kIsWeb) {
+      // On web, resolvedPath is a blob: URL, not a file path.
+      final response = await http.get(Uri.parse(resolvedPath));
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+        return null;
+      }
+      debugPrint('Recorded ${response.bodyBytes.length} bytes on web.');
+      // A bare WAV header is 44 bytes: the recorder was stopped before it
+      // captured any audio. Treat it as "nothing captured".
+      if (response.bodyBytes.length < minRecordingBytes) {
+        return null;
+      }
+      return response.bodyBytes;
+    }
+
     final file = File(resolvedPath);
     if (!await file.exists()) {
       return null;
     }
     final bytes = await file.readAsBytes();
     unawaited(file.delete().catchError((_) => file));
-    return bytes.isEmpty ? null : bytes;
+    return bytes.length < minRecordingBytes ? null : bytes;
   }
 
-  /// Discards the active recording without returning bytes — used when
+  /// Discards the active recording without returning bytes - used when
   /// exiting voice mode mid-recording.
   Future<void> cancelRecording() async {
     if (await _recorder.isRecording()) {
@@ -123,10 +210,10 @@ class VoiceService {
     }
 
     await _speech.listen(
-      localeId: _localeForLanguage(language),
-      listenFor: const Duration(seconds: 45),
-      pauseFor: const Duration(seconds: 3),
       listenOptions: SpeechListenOptions(
+        localeId: _localeForLanguage(language),
+        listenFor: const Duration(seconds: 45),
+        pauseFor: const Duration(seconds: 3),
         partialResults: true,
         cancelOnError: true,
         listenMode: ListenMode.dictation,
@@ -155,20 +242,34 @@ class VoiceService {
       return Uint8List(0);
     }
 
-    if (_shouldUseSahara) {
-      return _synthesizeSahara(trimmedText, language);
+    if (_shouldUseEdgeTts) {
+      return _synthesizeMansa(trimmedText, language);
     }
 
     return _synthesizeOmniVoice(trimmedText, language);
   }
 
+  /// Speaks [text] in [language]. Pass the `language` the rudo-chat response
+  /// returned (the REPLY language), not the UI language, so the Mansa voice
+  /// matches the text actually being read.
   Future<void> speakText(String text, String language) async {
     final trimmedText = text.trim();
     if (trimmedText.isEmpty) {
       return;
     }
 
+    // No Mansa voice for this language (tonga, lozi, unknown): don't even
+    // try the cloud call, go straight to the device voice.
+    if (_shouldUseEdgeTts && !_isMansaLanguage(language)) {
+      debugPrint(
+        'No Mansa TTS voice for "$language", using device TTS.',
+      );
+      await speakWithDeviceVoice(trimmedText, language);
+      return;
+    }
+
     try {
+      debugPrint('Synthesizing "$language" reply via cloud TTS.');
       final audioBytes = await synthesizeSpeech(trimmedText, language);
       await playAudio(audioBytes);
     } catch (error) {
@@ -183,6 +284,18 @@ class VoiceService {
     }
     final audioPlayer = _audioPlayer ??= AudioPlayer();
     await audioPlayer.stop();
+
+    // Android's MediaPlayer rejected the in-memory BytesSource for Mansa's WAV
+    // ("Failed to set source", MEDIA_ERROR_UNKNOWN). Two fixes: repair the WAV
+    // header (streamed WAVs often carry 0 / 0xFFFFFFFF chunk sizes), and play
+    // from a temp file instead of a BytesSource (mobile only; web has no
+    // filesystem so it plays from memory).
+    debugPrint(
+        'TTS audio: ${audioBytes.length} bytes, ${_describeWav(audioBytes)}');
+    final playable = _fixWavHeader(audioBytes);
+    final isWav = _looksLikeWav(playable);
+    final mime = isWav ? 'audio/wav' : 'audio/mpeg';
+
     final playbackEnded = Future.any<void>([
       audioPlayer.onPlayerComplete.first,
       audioPlayer.onPlayerStateChanged
@@ -190,10 +303,31 @@ class VoiceService {
               state == PlayerState.completed || state == PlayerState.stopped)
           .then((_) {}),
     ]);
-    await audioPlayer.play(
-      BytesSource(audioBytes, mimeType: 'audio/mpeg'),
+
+    if (kIsWeb) {
+      await audioPlayer.play(BytesSource(playable, mimeType: mime));
+      await playbackEnded.timeout(
+        const Duration(seconds: 120),
+        onTimeout: () {},
+      );
+      return;
+    }
+
+    final dir = await getTemporaryDirectory();
+    final file = File(
+      '${dir.path}/rudo_tts_${DateTime.now().microsecondsSinceEpoch}.${isWav ? 'wav' : 'mp3'}',
     );
-    await playbackEnded.timeout(const Duration(seconds: 120), onTimeout: () {});
+    await file.writeAsBytes(playable, flush: true);
+
+    try {
+      await audioPlayer.play(DeviceFileSource(file.path, mimeType: mime));
+      await playbackEnded.timeout(
+        const Duration(seconds: 120),
+        onTimeout: () {},
+      );
+    } finally {
+      unawaited(file.delete().catchError((_) => file));
+    }
   }
 
   Future<void> speakWithDeviceVoice(String text, String language) async {
@@ -237,9 +371,12 @@ class VoiceService {
     _onFinalResult?.call(words);
   }
 
-  bool get _shouldUseSahara {
+  /// True when TTS should go through the Supabase edge function (Mansa).
+  /// OmniVoice is only used if explicitly selected or if a URL is configured
+  /// and no edge function is set.
+  bool get _shouldUseEdgeTts {
     final provider = ttsProvider.trim().toLowerCase();
-    if (provider == 'sahara') {
+    if (provider == 'sahara' || provider == 'mansa') {
       return true;
     }
     if (provider == 'omnivoice' || provider == 'omni_voice') {
@@ -248,24 +385,19 @@ class VoiceService {
     return omnivoiceApiUrl.isEmpty && saharaTtsEdgeFunction.isNotEmpty;
   }
 
-  /// Synthesizes speech via Sahara's TTS Generate endpoint, proxied through
-  /// the sahara-tts edge function so SAHARA_API_KEY never reaches the client.
-  /// Only English and Shona are supported — this must only be called for
-  /// languages in the caller's voice-supported set (see
-  /// _voiceSupportedLanguages in home_widget.dart). Sahara has no accent
-  /// specifically for Shona-accented English or any of Rudo's other five
-  /// Bantu languages, so English replies use the "zulu" accent as the
-  /// closest available Southern African option.
-  Future<Uint8List> _synthesizeSahara(
+  /// Synthesizes speech via the Mansa TTS edge function, so MANSA_API_KEY
+  /// never reaches the client. Supports english, shona, bemba, chinyanja
+  /// and ndebele. The function picks the voice itself; the client only sends
+  /// the text and the language key.
+  Future<Uint8List> _synthesizeMansa(
     String trimmedText,
     String language,
   ) async {
-    final voiceLanguage = _saharaTtsLanguageCode(language);
-    final voiceAccent = _saharaTtsAccent(language);
-    if (voiceLanguage == null || voiceAccent == null) {
+    final mansaLanguage = _mansaLanguageKey(language);
+    if (mansaLanguage == null) {
       throw StateError(
-        'Sahara TTS has no voice for language "$language" — '
-        'only english and shona are supported.',
+        'Mansa TTS has no voice for language "$language" - '
+        'supported: ${mansaTtsLanguages.join(', ')}.',
       );
     }
 
@@ -273,10 +405,7 @@ class VoiceService {
       saharaTtsEdgeFunction,
       body: {
         'text': trimmedText,
-        'voice_language': voiceLanguage,
-        'voice_accent': voiceAccent,
-        'voice_gender': 'female',
-        'output_audio_format': 'wav',
+        'language': mansaLanguage,
       },
     ).timeout(const Duration(seconds: 45));
 
@@ -292,7 +421,9 @@ class VoiceService {
       }
     }
 
-    throw StateError('sahara-tts Edge Function did not return audio bytes.');
+    throw StateError(
+      '$saharaTtsEdgeFunction Edge Function did not return audio bytes.',
+    );
   }
 
   Future<Uint8List> _synthesizeOmniVoice(
@@ -382,27 +513,63 @@ class VoiceService {
     throw StateError('OmniVoice response did not include audio bytes.');
   }
 
-  /// Sahara's voice_language code for TTS — confirmed only 'en' and 'sn'
-  /// are supported (see Supported Languages And Accents). Null for
-  /// anything else so callers can fail loudly instead of mis-synthesizing.
-  String? _saharaTtsLanguageCode(String language) {
-    return switch (language.toLowerCase()) {
-      'english' => 'en',
-      'shona' => 'sn',
-      _ => null,
+  /// Normalizes app language names ("Nyanja", "chichewa", "sn", ...) to the
+  /// key the Mansa edge function expects, or null if Mansa has no voice.
+  String? _mansaLanguageKey(String language) {
+    final key = language.trim().toLowerCase().split(RegExp(r'[-_]')).first;
+    final normalized = switch (key) {
+      'en' => 'english',
+      'sn' => 'shona',
+      'nd' || 'nde' => 'ndebele',
+      'bem' => 'bemba',
+      'ny' || 'nya' || 'nyanja' || 'chichewa' => 'chinyanja',
+      _ => key,
     };
+    return mansaTtsLanguages.contains(normalized) ? normalized : null;
   }
 
-  /// Sahara's voice_accent for TTS. Shona has its own dedicated accent;
-  /// English has no Zimbabwe/Zambia-specific or generic American/British
-  /// accent option, so 'zulu' (Southern African) is used as the closest
-  /// available fit — confirmed against Sahara's accent list.
-  String? _saharaTtsAccent(String language) {
-    return switch (language.toLowerCase()) {
-      'english' => 'zulu',
-      'shona' => 'shona',
-      _ => null,
-    };
+  bool _isMansaLanguage(String language) => _mansaLanguageKey(language) != null;
+
+  bool _looksLikeWav(Uint8List b) =>
+      b.length >= 12 &&
+      String.fromCharCodes(b.sublist(0, 4)) == 'RIFF' &&
+      String.fromCharCodes(b.sublist(8, 12)) == 'WAVE';
+
+  /// Logs format code / channels / rate / bits so a bad Mansa WAV is visible.
+  String _describeWav(Uint8List b) {
+    if (!_looksLikeWav(b)) {
+      return 'not WAV (first bytes: ${b.take(4).toList()})';
+    }
+    if (b.length < 36) return 'WAV (truncated header)';
+    final v = ByteData.sublistView(b);
+    return 'WAV fmt=${v.getUint16(20, Endian.little)} '
+        'ch=${v.getUint16(22, Endian.little)} '
+        'rate=${v.getUint32(24, Endian.little)} '
+        'bits=${v.getUint16(34, Endian.little)} '
+        'riffSize=${v.getUint32(4, Endian.little)}';
+  }
+
+  /// Rewrites the RIFF and data chunk sizes to match the real byte count.
+  /// Streamed WAVs often declare 0 or 0xFFFFFFFF, which Android rejects.
+  Uint8List _fixWavHeader(Uint8List b) {
+    if (!_looksLikeWav(b)) return b;
+    final out = Uint8List.fromList(b);
+    final v = ByteData.sublistView(out);
+    v.setUint32(4, out.length - 8, Endian.little);
+    var off = 12;
+    while (off + 8 <= out.length) {
+      final id = String.fromCharCodes(out.sublist(off, off + 4));
+      final size = v.getUint32(off + 4, Endian.little);
+      if (id == 'data') {
+        final remaining = out.length - (off + 8);
+        if (size == 0 || size > remaining) {
+          v.setUint32(off + 4, remaining, Endian.little);
+        }
+        break;
+      }
+      off += 8 + size + (size % 2);
+    }
+    return out;
   }
 
   String _localeForLanguage(String? language) {

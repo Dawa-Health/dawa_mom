@@ -92,9 +92,44 @@ void main() {
           .overlaps(tester.getRect(find.byType(BottomNavigationBar))),
       isFalse,
     );
+    final navRect = tester.getRect(find.byType(BottomNavigationBar));
+    final shellWidth = tester.getSize(find.byType(Scaffold).first).width;
+    expect(navRect.left, greaterThanOrEqualTo(12));
+    expect(shellWidth - navRect.right, greaterThanOrEqualTo(12));
+    expect(
+      tester.widgetList<Scaffold>(find.byType(Scaffold)).first.extendBody,
+      isTrue,
+    );
   });
 
-  testWidgets('mobile shell is the single owner of the decorative footer',
+  testWidgets('mobile page content clears the floating navigation inset',
+      (tester) async {
+    const finalControl = ValueKey('final-control');
+    await tester.pumpWidget(
+      _shellAt(
+        390,
+        child: const DawaPageScaffold(
+          child: Column(
+            children: [
+              SizedBox(height: 900),
+              SizedBox(key: finalControl, height: 44),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.drag(
+      find.byType(SingleChildScrollView),
+      const Offset(0, -900),
+    );
+    await tester.pumpAndSettle();
+
+    final control = tester.getRect(find.byKey(finalControl));
+    final navigation = tester.getRect(find.byType(BottomNavigationBar));
+    expect(control.bottom, lessThan(navigation.top));
+  });
+
+  testWidgets('mobile shell no longer paints a decorative footer wave',
       (tester) async {
     await tester.pumpWidget(
       _shellAt(
@@ -108,7 +143,7 @@ void main() {
     final waves = find.byWidgetPredicate(
       (widget) => widget is CustomPaint && widget.painter is DawaWavePainter,
     );
-    expect(waves, findsOneWidget);
+    expect(waves, findsNothing);
   });
 
   testWidgets('tablet uses a navigation rail', (tester) async {
