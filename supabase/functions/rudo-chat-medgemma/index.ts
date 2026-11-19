@@ -1,8 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
-import { askMedGemma, type MedGemmaTurn } from "../_shared/medgemma.ts";
+import { askMedGemma } from "../_shared/medgemma.ts";
 import { detectLanguage, normalizeLanguage, type RudoLanguage } from "../_shared/language.ts";
+import { answerInEnglish, defaultTranslate, toEnglishHistory } from "./english_route.ts";
 // Reused as-is so the existing rudo-chat function is not modified.
 import {
   looksLikeBookingMessage,
@@ -734,14 +735,15 @@ async function generateChatReply(input: {
     };
   }
 
-  // Everything else (maternal health questions) goes to MedGemma.
+  // Everything else (maternal health questions) goes to MedGemma, in English only.
+  // The patient's message is translated into English, MedGemma answers in English, and
+  // the answer is translated back (see english_route.ts). Speech stays with Mansa: the
+  // app transcribes with Mansa before this, and speaks the reply with Mansa TTS after.
   // MedGemma was fine-tuned with a short system prompt that the Space adds itself, so it
   // gets just the question + recent pairs. The full prompt is only for the Gemini fallback.
   const targetLanguage: RudoLanguage =
     normalizeLanguage(stringOrNull(input.metadata.language)) ?? "english";
-  // Only exchanges in the same language are sent as history. Earlier replies in another
-  // language (for example Nyanja) make the model keep answering in that language.
-  const medgemmaHistory = toMedGemmaHistory(history, targetLanguage);
+  const englishHistory = toEnglishHistory(history);
   const prompt = buildBotPrompt({
     message: input.message,
     metadata: input.metadata,
@@ -751,68 +753,50 @@ async function generateChatReply(input: {
   });
   log(rid, "prompt_built", {
     historyTurns: history.length,
-    medgemmaPairs: medgemmaHistory.length,
+    medgemmaPairs: englishHistory.length,
     promptLength: prompt.length,
     targetLanguage,
   });
 
-  // One MedGemma call, followed by a check that the reply really is in the patient's language.
-  const callMedGemma = async (hist: MedGemmaTurn[], attempt: string) => {
-    const budgetMs = Math.max(5_000, input.deadlineAt - Date.now() - GEMINI_RESERVE_MS);
-    log(rid, "medgemma_call_start", { attempt, budgetMs, targetLanguage });
-    const t0 = Date.now();
-    const { text, raw } = await withTimeout(
-      askMedGemma({
-        question: withLanguageHint(input.message, targetLanguage),
-        history: hist,
-      }),
-      budgetMs,
-      "MedGemma",
-    );
-    log(rid, "medgemma_call_ok", { attempt, ms: Date.now() - t0, replyLength: text.length });
-
-    // If the check itself fails, detectLanguage returns the target language, so an
-    // unverifiable reply is let through rather than blocked.
-    const check = await detectLanguage(text, targetLanguage);
-    const matches = check.source !== "gemini" || check.language === targetLanguage;
-    log(rid, "reply_language_checked", {
-      attempt,
-      target: targetLanguage,
-      replyLanguage: check.language,
-      source: check.source,
-      matches,
-    });
-    return { text, raw, matches, replyLanguage: check.language };
-  };
-
+  const progress = { redFlag };
   try {
-    let result = await callMedGemma(medgemmaHistory, "first");
-    const timeLeft = input.deadlineAt - Date.now() - GEMINI_RESERVE_MS;
-    if (!result.matches && timeLeft > 10_000) {
-      log(rid, "medgemma_language_retry", {
-        expected: targetLanguage,
-        got: result.replyLanguage,
-      });
-      result = await callMedGemma([], "retry_no_history");
-    }
-    if (!result.matches) {
-      throw new Error(`MedGemma replied in ${result.replyLanguage}, expected ${targetLanguage}`);
-    }
-    const finalText = redFlag ? RED_FLAG_NOTICE + result.text : result.text;
+    const result = await answerInEnglish(
+      {
+        message: input.message,
+        language: targetLanguage,
+        history: englishHistory,
+        deadlineAt: input.deadlineAt - GEMINI_RESERVE_MS,
+        redFlagPattern: RED_FLAG_PATTERN,
+        redFlagNotice: RED_FLAG_NOTICE,
+        redFlagInMessage: redFlag,
+        progress,
+      },
+      {
+        translate: defaultTranslate,
+        askMedGemma: (question, timeoutMs) =>
+          withTimeout(askMedGemma(question), timeoutMs, "MedGemma"),
+        now: Date.now,
+        log: (event, data) => log(rid, event, data),
+      },
+    );
     return {
-      reply: finalText,
+      reply: result.reply,
       raw: {
-        reply: finalText,
+        reply: result.reply,
         model: "medgemma",
         route: "medical",
-        red_flag: redFlag,
+        red_flag: result.redFlag,
         reply_language: targetLanguage,
-        space_response: result.raw,
+        // English copies, so later turns can give MedGemma English history.
+        english_question: result.englishQuestion,
+        english_answer: result.englishAnswer,
+        translation: { question: result.questionTranslator, answer: result.answerTranslator },
+        space_response: result.medgemmaRaw,
       },
       source: "rudo_medgemma",
     };
   } catch (error) {
-    logError(rid, "medgemma_failed_falling_back_to_gemini", error);
+    logError(rid, "medgemma_failed_falling_back_to_gemini", error, { targetLanguage });
   }
 
   log(rid, "gemini_fallback_start");
@@ -820,7 +804,7 @@ async function generateChatReply(input: {
   const text = await callGemini(prompt, rid);
   const { clean, handoff } = cleanBotText(text, false);
   log(rid, "gemini_fallback_ok", { ms: Date.now() - t1, replyLength: clean.length });
-  const finalText = redFlag ? RED_FLAG_NOTICE + clean : clean;
+  const finalText = progress.redFlag ? RED_FLAG_NOTICE + clean : clean;
   return {
     reply: finalText,
     raw: {
@@ -828,7 +812,7 @@ async function generateChatReply(input: {
       model: "gemini_fallback",
       route: "medical",
       reply_language: targetLanguage,
-      red_flag: redFlag,
+      red_flag: progress.redFlag,
       handoff,
     },
     source: "rudo_gemini_edge",
@@ -869,53 +853,6 @@ async function loadHistory(
   const last = turns[turns.length - 1];
   if (last && last.role === "user" && last.content === currentMessage) turns.pop();
   return turns.filter((t) => t.content?.trim());
-}
-
-const LANGUAGE_LABELS: Record<RudoLanguage, string> = {
-  english: "English",
-  shona: "Shona",
-  ndebele: "Ndebele",
-  chinyanja: "Chinyanja (Chichewa)",
-  bemba: "Bemba",
-  tonga: "Tonga",
-  lozi: "Lozi",
-};
-
-// Tells MedGemma which language to answer in. English is left as the model was trained.
-function withLanguageHint(question: string, language: RudoLanguage): string {
-  if (language === "english") return question;
-  return `${question}\n\n(Please reply in ${LANGUAGE_LABELS[language]} only.)`;
-}
-
-// Pairs consecutive user -> assistant turns into {user, model}. A pair is kept only when
-// both the patient's message and Rudo's reply were in `targetLanguage` (the languages are
-// stored on each row: payload.metadata.language on user rows, payload.reply_language on
-// assistant rows). Older rows have no reply_language and are dropped. Booking replies and
-// company/price replies are dropped too, so they don't steer the medical model.
-function toMedGemmaHistory(history: HistoryTurn[], targetLanguage: RudoLanguage): MedGemmaTurn[] {
-  const pairs: MedGemmaTurn[] = [];
-  let pendingUser: { text: string; language: RudoLanguage | null } | null = null;
-  for (const t of history) {
-    if (t.role === "user") {
-      const meta = t.payload?.metadata as Record<string, unknown> | undefined;
-      pendingUser = {
-        text: t.content,
-        language: normalizeLanguage(stringOrNull(meta?.language)),
-      };
-    } else if (t.role === "assistant" && pendingUser !== null) {
-      const isBooking = t.source === "rudo_booking";
-      const isCompany = t.payload?.route === "company";
-      const replyLanguage = normalizeLanguage(stringOrNull(t.payload?.reply_language));
-      if (
-        !isBooking && !isCompany &&
-        pendingUser.language === targetLanguage && replyLanguage === targetLanguage
-      ) {
-        pairs.push({ user: pendingUser.text, model: t.content });
-      }
-      pendingUser = null;
-    }
-  }
-  return pairs.slice(-2); // the Space also keeps only the last 2
 }
 
 // The old Rudo bot's instructions, adapted for the DawaMom app: the catalog comes from

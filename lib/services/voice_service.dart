@@ -12,6 +12,8 @@ import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as supabase;
 
+import 'package:dawa_mom/services/speech_chunks.dart';
+
 // NOTE: requires the `record` package (pubspec.yaml has record: ^6.2.1).
 // speech_to_text never exposes raw audio bytes, only recognized text, so it
 // can't feed server-side STT.
@@ -94,6 +96,9 @@ class VoiceService {
   ValueChanged<String>? _onFinalResult;
   ValueChanged<String>? _onPartialResult;
   String? _recordingPath;
+  // Bumped by every speakText() and stopPlayback(); a reply being spoken in
+  // parts stops when this no longer matches the value it started with.
+  int _speechSession = 0;
 
   // ── Recording flow ────────────────────────────────────────────────
   // Records a real audio clip (unlike speech_to_text, which never
@@ -252,9 +257,16 @@ class VoiceService {
   /// Speaks [text] in [language]. Pass the `language` the rudo-chat response
   /// returned (the REPLY language), not the UI language, so the Mansa voice
   /// matches the text actually being read.
+  ///
+  /// Long replies are spoken in parts (see speech_chunks.dart): the first
+  /// part starts within a few seconds and each next part is synthesized while
+  /// the previous one plays, so no single request hits the 45-second timeout.
+  /// If a part fails, the device voice reads the rest of the reply.
   Future<void> speakText(String text, String language) async {
-    final trimmedText = text.trim();
-    if (trimmedText.isEmpty) {
+    // A new reply, or stopPlayback(), ends any reply still being spoken.
+    final session = ++_speechSession;
+    final speakable = cleanForSpeech(text);
+    if (speakable.isEmpty) {
       return;
     }
 
@@ -264,18 +276,34 @@ class VoiceService {
       debugPrint(
         'No Mansa TTS voice for "$language", using device TTS.',
       );
-      await speakWithDeviceVoice(trimmedText, language);
+      await speakWithDeviceVoice(speakable, language);
       return;
     }
 
-    try {
-      debugPrint('Synthesizing "$language" reply via cloud TTS.');
-      final audioBytes = await synthesizeSpeech(trimmedText, language);
-      await playAudio(audioBytes);
-    } catch (error) {
-      debugPrint('Cloud voice synthesis failed, using device TTS: $error');
-      await speakWithDeviceVoice(trimmedText, language);
-    }
+    final chunks = splitForSpeech(speakable);
+    debugPrint(
+      'Synthesizing "$language" reply via cloud TTS in ${chunks.length} part(s).',
+    );
+    await speakChunks(
+      chunks: chunks,
+      synthesize: (chunk) async {
+        final watch = Stopwatch()..start();
+        final audio = await synthesizeSpeech(chunk, language);
+        // Synthesis time against audio length shows whether Mansa keeps up
+        // with playback.
+        final seconds = _wavSeconds(audio);
+        debugPrint(
+          'Voice part ready: ${chunk.length} chars in '
+          '${watch.elapsedMilliseconds} ms, '
+          '${seconds == null ? '?' : seconds.toStringAsFixed(1)} s of audio.',
+        );
+        return audio;
+      },
+      play: playAudio,
+      fallback: (rest) => speakWithDeviceVoice(rest, language),
+      isCancelled: () => session != _speechSession,
+      log: (message) => debugPrint(message),
+    );
   }
 
   Future<void> playAudio(Uint8List audioBytes) async {
@@ -296,6 +324,16 @@ class VoiceService {
     final isWav = _looksLikeWav(playable);
     final mime = isWav ? 'audio/wav' : 'audio/mpeg';
 
+    // Never wait much longer than the clip itself for the end-of-playback
+    // event, so a missed event can't leave a reply silent half-way.
+    final clipSeconds = _wavSeconds(playable);
+    final maxWait = clipSeconds == null
+        ? const Duration(seconds: 120)
+        : Duration(milliseconds: ((clipSeconds + 4) * 1000).round());
+    void onNoEndEvent() => debugPrint(
+          'No end-of-playback event after ${maxWait.inSeconds} s; continuing.',
+        );
+
     final playbackEnded = Future.any<void>([
       audioPlayer.onPlayerComplete.first,
       audioPlayer.onPlayerStateChanged
@@ -306,10 +344,7 @@ class VoiceService {
 
     if (kIsWeb) {
       await audioPlayer.play(BytesSource(playable, mimeType: mime));
-      await playbackEnded.timeout(
-        const Duration(seconds: 120),
-        onTimeout: () {},
-      );
+      await playbackEnded.timeout(maxWait, onTimeout: onNoEndEvent);
       return;
     }
 
@@ -321,10 +356,7 @@ class VoiceService {
 
     try {
       await audioPlayer.play(DeviceFileSource(file.path, mimeType: mime));
-      await playbackEnded.timeout(
-        const Duration(seconds: 120),
-        onTimeout: () {},
-      );
+      await playbackEnded.timeout(maxWait, onTimeout: onNoEndEvent);
     } finally {
       unawaited(file.delete().catchError((_) => file));
     }
@@ -348,6 +380,8 @@ class VoiceService {
   }
 
   Future<void> stopPlayback() async {
+    // Stops a reply that is being spoken in parts from starting its next part.
+    _speechSession++;
     await _audioPlayer?.stop();
     await _fallbackTts?.stop();
   }
@@ -547,6 +581,15 @@ class VoiceService {
         'rate=${v.getUint32(24, Endian.little)} '
         'bits=${v.getUint16(34, Endian.little)} '
         'riffSize=${v.getUint32(4, Endian.little)}';
+  }
+
+  /// Length of a WAV clip in seconds, from its byte rate and size, or null if
+  /// [b] is not a WAV.
+  double? _wavSeconds(Uint8List b) {
+    if (!_looksLikeWav(b) || b.length <= 44) return null;
+    final byteRate = ByteData.sublistView(b).getUint32(28, Endian.little);
+    if (byteRate <= 0) return null;
+    return (b.length - 44) / byteRate;
   }
 
   /// Rewrites the RIFF and data chunk sizes to match the real byte count.

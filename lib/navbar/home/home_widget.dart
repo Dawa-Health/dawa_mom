@@ -1442,7 +1442,7 @@ class _SupabaseAIChatModalState extends State<AIChatModal>
       t = await transcribeVoiceNote(
         audioBytes: audioBytes,
         language: _rudoLanguage, // use your existing language variable
-        languageLocked: true,
+        languageLocked: false,
       );
     } catch (error) {
       debugPrint('Rudo transcription failed: $error');
