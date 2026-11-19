@@ -2,10 +2,15 @@ import '/localization/dawa_localized_material.dart';
 
 import '/components/branding/dawa_mom_logo.dart';
 import '/content/dawa_learning_asset_registry.dart';
+import '/features/notifications/dawa_notification_counter.dart';
 import 'dawa_contextual_image.dart';
 import 'dawa_design_tokens.dart';
 
 abstract final class DawaArtwork {
+  /// Full-bleed home illustration supplied for the DawaMom dashboard hero.
+  /// It includes the encouragement bubble and is deliberately used only on the
+  /// home surface, where the larger treatment has enough room to remain clear.
+  static const homeHeroMama = 'assets/images/dawa_mom_home_hero_mama.png';
   static const motherGreeting =
       'dawa_mom_screens/assets/characters/main_mother/CHAR-MOTHER-Greeting.png';
   static const motherLearning =
@@ -930,30 +935,12 @@ class _DawaSectionMark extends StatelessWidget {
   const _DawaSectionMark();
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-        width: 10,
-        height: 30,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 10,
-              height: 10,
-              decoration: BoxDecoration(
-                color: DawaColors.green,
-                borderRadius: BorderRadius.circular(3),
-              ),
-            ),
-            const SizedBox(height: 3),
-            Container(
-              width: 6,
-              height: 6,
-              decoration: BoxDecoration(
-                color: DawaColors.primary,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ],
+  Widget build(BuildContext context) => Container(
+        width: 4,
+        height: 24,
+        decoration: BoxDecoration(
+          color: DawaColors.green,
+          borderRadius: BorderRadius.circular(DawaRadii.pill),
         ),
       );
 }
@@ -1038,19 +1025,65 @@ class DawaAppHeader extends StatelessWidget {
                       icon: const Icon(Icons.notifications_none_rounded),
                       color: DawaColors.primary,
                     ),
-                    if (notificationUnread)
-                      Positioned(
-                        right: 10,
-                        top: 9,
-                        child: Container(
-                          width: 8,
-                          height: 8,
-                          decoration: const BoxDecoration(
-                            color: DawaColors.green,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
+                    ValueListenableBuilder<int>(
+                      valueListenable: DawaNotificationCounter.unreadCount,
+                      builder: (context, count, _) =>
+                          ValueListenableBuilder<int>(
+                        valueListenable: DawaNotificationCounter.pulse,
+                        builder: (context, pulse, __) {
+                          final hasUnread = count > 0 || notificationUnread;
+                          if (!hasUnread) return const SizedBox.shrink();
+                          final label = count > 99 ? '99+' : '$count';
+                          final reducedMotion =
+                              MediaQuery.disableAnimationsOf(context);
+                          final badge = Semantics(
+                            liveRegion: true,
+                            label: count > 0
+                                ? '$label unread notifications'
+                                : 'Unread notifications',
+                            child: Container(
+                              constraints: const BoxConstraints(minWidth: 18),
+                              height: 18,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 4),
+                              alignment: Alignment.center,
+                              decoration: const BoxDecoration(
+                                color: DawaColors.green,
+                                shape: BoxShape.circle,
+                              ),
+                              child: count > 0
+                                  ? Text(
+                                      label,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    )
+                                  : null,
+                            ),
+                          );
+                          return Positioned(
+                            right: 5,
+                            top: 5,
+                            child: reducedMotion
+                                ? badge
+                                : TweenAnimationBuilder<double>(
+                                    key: ValueKey(pulse),
+                                    duration: const Duration(milliseconds: 420),
+                                    tween: Tween(begin: .76, end: 1.0),
+                                    curve: Curves.elasticOut,
+                                    builder: (context, scale, child) =>
+                                        Transform.scale(
+                                      scale: scale,
+                                      child: child,
+                                    ),
+                                    child: badge,
+                                  ),
+                          );
+                        },
                       ),
+                    ),
                   ],
                 ),
               ),
@@ -1107,29 +1140,29 @@ class DawaResponsiveGrid extends StatelessWidget {
   final double runSpacing;
 
   @override
-Widget build(BuildContext context) => LayoutBuilder(
-      builder: (context, constraints) {
-        if (children.isEmpty) {
-          return const SizedBox.shrink();
-        }
-        final count = constraints.maxWidth >= DawaBreakpoints.desktop
-            ? desktopColumns
-            : constraints.maxWidth >= DawaBreakpoints.mobile
-                ? tabletColumns
-                : mobileColumns;
-        final safeCount = count.clamp(1, children.length);
-        final width =
-            (constraints.maxWidth - spacing * (safeCount - 1)) / safeCount;
-        return Wrap(
-          spacing: spacing,
-          runSpacing: runSpacing,
-          children: [
-            for (final child in children)
-              SizedBox(width: width, child: child),
-          ],
-        );
-      },
-    );
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, constraints) {
+          if (children.isEmpty) {
+            return const SizedBox.shrink();
+          }
+          final count = constraints.maxWidth >= DawaBreakpoints.desktop
+              ? desktopColumns
+              : constraints.maxWidth >= DawaBreakpoints.mobile
+                  ? tabletColumns
+                  : mobileColumns;
+          final safeCount = count.clamp(1, children.length);
+          final width =
+              (constraints.maxWidth - spacing * (safeCount - 1)) / safeCount;
+          return Wrap(
+            spacing: spacing,
+            runSpacing: runSpacing,
+            children: [
+              for (final child in children)
+                SizedBox(width: width, child: child),
+            ],
+          );
+        },
+      );
 }
 
 class DawaIconBadge extends StatelessWidget {
@@ -1201,6 +1234,251 @@ class DawaStatusPill extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                 ),
               ),
+            ],
+          ),
+        ),
+      );
+}
+
+/// Compact, information-first metric used for real health values and status.
+/// Unlike a feature card it deliberately keeps artwork and actions secondary.
+class DawaMetricTile extends StatelessWidget {
+  const DawaMetricTile({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.helper,
+    this.color = DawaColors.primary,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final String? helper;
+  final Color color;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => DawaCard(
+        padding: const EdgeInsets.all(DawaSpacing.sm),
+        radius: DawaRadii.small,
+        onTap: onTap,
+        semanticLabel: '$label. $value${helper == null ? '' : '. $helper'}',
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DawaIconBadge(icon: icon, color: color, size: 36),
+            const SizedBox(width: DawaSpacing.xs),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: context.dawaCaption),
+                  const SizedBox(height: 1),
+                  Text(
+                    value,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: context.dawaSectionTitle,
+                  ),
+                  if (helper?.trim().isNotEmpty == true) ...[
+                    const SizedBox(height: 2),
+                    Text(helper!, style: context.dawaCaption),
+                  ],
+                ],
+              ),
+            ),
+            if (onTap != null)
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: DawaColors.muted,
+                size: 20,
+              ),
+          ],
+        ),
+      );
+}
+
+/// A compact navigation/action pattern for utility links and settings.
+class DawaActionRow extends StatelessWidget {
+  const DawaActionRow({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.onTap,
+    this.subtitle,
+    this.trailing,
+    this.color = DawaColors.primary,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final String? trailing;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: '$title${subtitle == null ? '' : '. $subtitle'}',
+        excludeSemantics: true,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(DawaRadii.small),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 56),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: DawaSpacing.sm,
+                  vertical: DawaSpacing.xs,
+                ),
+                child: Row(
+                  children: [
+                    DawaIconBadge(icon: icon, color: color, size: 36),
+                    const SizedBox(width: DawaSpacing.sm),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(title,
+                              style: context.dawaBody.copyWith(
+                                fontWeight: FontWeight.w600,
+                              )),
+                          if (subtitle?.trim().isNotEmpty == true)
+                            Text(subtitle!, style: context.dawaCaption),
+                        ],
+                      ),
+                    ),
+                    if (trailing?.trim().isNotEmpty == true) ...[
+                      const SizedBox(width: DawaSpacing.xs),
+                      Flexible(
+                        child: Text(
+                          trailing!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: context.dawaCaption.copyWith(
+                            color: color,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(width: DawaSpacing.xxs),
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      color: DawaColors.muted,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+class DawaSegmentedItem {
+  const DawaSegmentedItem({required this.label, this.icon, this.id});
+
+  final String label;
+  final IconData? icon;
+  final String? id;
+}
+
+/// Shared compact segmented control for top-level modes and sections.
+class DawaSegmentedControl extends StatelessWidget {
+  const DawaSegmentedControl({
+    super.key,
+    required this.items,
+    required this.selectedIndex,
+    required this.onSelected,
+    this.keyPrefix = 'segment',
+  });
+
+  final List<DawaSegmentedItem> items;
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+  final String keyPrefix;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        container: true,
+        child: Container(
+          padding: const EdgeInsets.all(DawaSpacing.xxs),
+          decoration: BoxDecoration(
+            color: DawaColors.surface,
+            borderRadius: BorderRadius.circular(DawaRadii.medium),
+            border: Border.all(color: DawaColors.line),
+          ),
+          child: Row(
+            children: [
+              for (var index = 0; index < items.length; index++) ...[
+                if (index > 0) const SizedBox(width: DawaSpacing.xxs),
+                Expanded(
+                  child: Semantics(
+                    button: true,
+                    selected: selectedIndex == index,
+                    label: items[index].label,
+                    child: Material(
+                      color: selectedIndex == index
+                          ? DawaColors.primary
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(DawaRadii.small),
+                      child: InkWell(
+                        key: ValueKey(
+                          '$keyPrefix-${items[index].id ?? index}',
+                        ),
+                        onTap: () => onSelected(index),
+                        borderRadius: BorderRadius.circular(DawaRadii.small),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(minHeight: 44),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: DawaSpacing.xs,
+                              vertical: DawaSpacing.xs,
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                if (items[index].icon != null) ...[
+                                  Icon(
+                                    items[index].icon,
+                                    size: 18,
+                                    color: selectedIndex == index
+                                        ? Colors.white
+                                        : DawaColors.textSecondary,
+                                  ),
+                                  const SizedBox(width: DawaSpacing.xxs),
+                                ],
+                                Flexible(
+                                  child: Text(
+                                    items[index].label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.center,
+                                    style: context.dawaCaption.copyWith(
+                                      color: selectedIndex == index
+                                          ? Colors.white
+                                          : DawaColors.textSecondary,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -1333,6 +1611,7 @@ class DawaTextButton extends StatelessWidget {
     this.icon,
     this.busy = false,
     this.fullWidth = false,
+    this.compact = false,
   });
 
   final String label;
@@ -1340,6 +1619,7 @@ class DawaTextButton extends StatelessWidget {
   final IconData? icon;
   final bool busy;
   final bool fullWidth;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) => _DawaButton(
@@ -1348,6 +1628,7 @@ class DawaTextButton extends StatelessWidget {
         icon: icon,
         busy: busy,
         fullWidth: fullWidth,
+        compact: compact,
         variant: _DawaButtonVariant.text,
       );
 }

@@ -45,6 +45,7 @@ write or reveal their values.
 | `DAWA_CLINICIAN_EMAIL_RESOLVER_TOKEN` | Existing resolver authentication |
 | `DAWA_CLINICIAN_APPOINTMENT_URL` | Existing appointment integration endpoint |
 | `DAWA_CLINICIAN_PATIENT_SYNC_URL` | Existing patient sync endpoint |
+| `DAWA_CLINICIAN_RISK_ALERT_URL` | Dawa Clinician `sync-dawa-mom-risk-alert` endpoint |
 | `DAWA_CLINICIAN_SYNC_SECRET` | Existing clinician integration authentication |
 | `DAWA_MOM_SYNC_SECRET` | Existing incoming Dawa Mom sync authentication |
 | `DAWA_MOM_WORKER_SECRET` | Existing durable integration worker authentication |

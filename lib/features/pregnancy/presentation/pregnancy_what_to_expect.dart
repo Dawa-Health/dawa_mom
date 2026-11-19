@@ -1,7 +1,7 @@
 import '/localization/dawa_localized_material.dart';
 
-import '/components/responsive/responsive_layout.dart';
 import '/design_system/dawa_components.dart';
+import '/design_system/dawa_design_tokens.dart';
 import '/features/profile/data/health_profile_repository.dart';
 import '/features/profile/profile_completion_page.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
@@ -36,7 +36,11 @@ class _PregnancyWhatToExpectLoaderState
   }
 
   void _reload() {
-    if (mounted) setState(() => _profile = _repository.load());
+    if (mounted) {
+      setState(() {
+        _profile = _repository.load();
+      });
+    }
   }
 
   @override
@@ -51,11 +55,10 @@ class _PregnancyWhatToExpectLoaderState
           );
         }
         if (!snapshot.hasData) {
-          return DawaMomCard(
-            child: _PregnancyUnavailable(onRetry: _reload),
-          );
+          return DawaCard(child: _PregnancyUnavailable(onRetry: _reload));
         }
-        return DawaMomCard(
+        return DawaCard(
+          color: DawaColors.warmSurface,
           child: PregnancyWhatToExpectCard(
             profile: snapshot.data!,
             compact: widget.compact,
@@ -139,7 +142,6 @@ class _PregnantWithData extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = FlutterFlowTheme.of(context);
     final week = profile.pregnancyWeek;
     final trimester = profile.trimester;
     final dueDate = profile.calculatedDueDate;
@@ -151,17 +153,14 @@ class _PregnantWithData extends StatelessWidget {
           children: [
             Text(
               week == null ? 'Pregnancy timeline' : 'Week $week',
-              style: theme.headlineSmall.copyWith(
-                color: theme.primary,
-                fontWeight: FontWeight.w700,
-              ),
+              style: context.dawaTitle.copyWith(color: DawaColors.primary),
             ),
             const SizedBox(height: 4),
             Text(
               trimester == null
                   ? 'Dates available in your health profile'
                   : 'Trimester $trimester',
-              style: theme.bodyMedium.copyWith(color: theme.secondaryText),
+              style: context.dawaCaption,
             ),
           ],
         );
@@ -172,18 +171,18 @@ class _PregnantWithData extends StatelessWidget {
               dueDate == null
                   ? 'Your due date has not been added.'
                   : 'Estimated due date · ${DateFormat('d MMMM y').format(dueDate)}',
-              style: theme.bodyMedium.copyWith(fontWeight: FontWeight.w500),
+              style: context.dawaBody.copyWith(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),
             Text(
               'Pregnancy dates are estimates. Follow the advice from your health worker.',
-              style: theme.bodySmall.copyWith(color: theme.secondaryText),
+              style: context.dawaCaption,
             ),
             const SizedBox(height: 8),
-            TextButton.icon(
+            DawaCompactButton(
               onPressed: onOpenProfile,
-              icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-              label: const Text('View pregnancy details'),
+              icon: Icons.arrow_forward_rounded,
+              label: 'View pregnancy details',
             ),
           ],
         );
@@ -234,7 +233,6 @@ class _PregnancyStateMessage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = FlutterFlowTheme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -244,11 +242,10 @@ class _PregnancyStateMessage extends StatelessWidget {
           subtitle: description,
         ),
         const SizedBox(height: 12),
-        TextButton.icon(
+        DawaCompactButton(
           onPressed: onAction,
-          icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-          label: Text(actionLabel),
-          style: TextButton.styleFrom(foregroundColor: theme.primary),
+          icon: Icons.arrow_forward_rounded,
+          label: actionLabel,
         ),
       ],
     );
@@ -268,19 +265,10 @@ class _StatusHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = FlutterFlowTheme.of(context);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: theme.primary.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(13),
-          ),
-          child: Icon(icon, color: theme.primary),
-        ),
+        DawaIconBadge(icon: icon, color: DawaColors.purple),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
@@ -288,12 +276,12 @@ class _StatusHeader extends StatelessWidget {
             children: [
               Text(
                 title,
-                style: theme.titleSmall.copyWith(fontWeight: FontWeight.w600),
+                style: context.dawaSectionTitle,
               ),
               const SizedBox(height: 3),
               Text(
                 subtitle,
-                style: theme.bodySmall.copyWith(color: theme.secondaryText),
+                style: context.dawaCaption,
               ),
             ],
           ),

@@ -16,6 +16,14 @@ class Appointment {
     required this.source,
     required this.createdAt,
     required this.integrationStatus,
+    this.serviceId = '',
+    this.externalServiceIdSnapshot,
+    this.serviceNameSnapshot,
+    this.isPaidSnapshot = false,
+    this.priceSnapshot = 0,
+    this.currencySnapshot = 'ZMW',
+    this.paymentMethod = 'online',
+    this.paymentState = 'not_required',
     this.reason,
     this.notes,
     this.externalAppointmentId,
@@ -43,6 +51,17 @@ class Appointment {
   final String source;
   final DateTime createdAt;
   final String integrationStatus;
+  final String serviceId;
+  final String? externalServiceIdSnapshot;
+  final String? serviceNameSnapshot;
+  final bool isPaidSnapshot;
+  final double priceSnapshot;
+  final String currencySnapshot;
+  final String paymentMethod;
+
+  /// Server-owned lifecycle state for an appointment's required payment.
+  /// It is deliberately separate from the clinic's appointment [status].
+  final String paymentState;
   final String? externalAppointmentId;
   final String? integrationErrorCode;
   final String? patientSafeStatusMessage;
@@ -55,11 +74,29 @@ class Appointment {
   bool get canPatientCancel =>
       status == 'pending' || status == 'confirmed' || status == 'rescheduled';
 
+  bool get requiresOnlinePayment => isPaidSnapshot && paymentMethod == 'online';
+
+  bool get paymentConfirmed => paymentState == 'successful';
+
+  bool get paymentAwaitingResolution => const {
+        'not_started',
+        'pending',
+        'processing',
+      }.contains(paymentState);
+
+  bool get paymentUnsuccessful => const {
+        'failed',
+        'cancelled',
+        'expired',
+        'reconciliation_required',
+      }.contains(paymentState);
+
   bool get isUpcoming {
     final start = dateAtTime(date, startTime);
     return start.isAfter(DateTime.now()) &&
         !const {'cancelled', 'declined', 'completed', 'missed'}
-            .contains(status);
+            .contains(status) &&
+        (!requiresOnlinePayment || paymentConfirmed);
   }
 
   Appointment copyWith({
@@ -85,6 +122,14 @@ class Appointment {
         source: source,
         createdAt: createdAt,
         integrationStatus: integrationStatus,
+        serviceId: serviceId,
+        externalServiceIdSnapshot: externalServiceIdSnapshot,
+        serviceNameSnapshot: serviceNameSnapshot,
+        isPaidSnapshot: isPaidSnapshot,
+        priceSnapshot: priceSnapshot,
+        currencySnapshot: currencySnapshot,
+        paymentMethod: paymentMethod,
+        paymentState: paymentState,
         externalAppointmentId: externalAppointmentId,
         integrationErrorCode: integrationErrorCode,
         patientSafeStatusMessage: patientSafeStatusMessage,
@@ -113,6 +158,20 @@ class Appointment {
       source: json['source']?.toString() ?? 'dawa_mom',
       createdAt: DateTime.parse(json['created_at'].toString()),
       integrationStatus: json['integration_status']?.toString() ?? 'pending',
+      serviceId: json['service_id']?.toString() ?? '',
+      externalServiceIdSnapshot:
+          json['external_service_id_snapshot']?.toString(),
+      serviceNameSnapshot: json['service_name_snapshot']?.toString(),
+      isPaidSnapshot: json['is_paid_snapshot'] as bool? ?? false,
+      priceSnapshot:
+          double.tryParse(json['price_snapshot']?.toString() ?? '') ?? 0,
+      currencySnapshot: json['currency_snapshot']?.toString() ?? 'ZMW',
+      paymentMethod: json['payment_method']?.toString() ?? 'online',
+      paymentState: json['payment_state']?.toString() ??
+          ((json['is_paid_snapshot'] as bool? ?? false) &&
+                  json['payment_method']?.toString() != 'cash'
+              ? 'not_started'
+              : 'not_required'),
       externalAppointmentId:
           json['dawa_clinician_appointment_id']?.toString() ??
               json['external_appointment_id']?.toString(),
@@ -135,6 +194,27 @@ class Appointment {
     final minute = parts.length < 2 ? 0 : int.tryParse(parts[1]) ?? 0;
     return DateTime(date.year, date.month, date.day, hour, minute);
   }
+}
+
+@immutable
+class AppointmentBookingResult {
+  const AppointmentBookingResult({
+    required this.appointment,
+    required this.paymentStatus,
+    required this.paymentMethod,
+    this.paymentAmount,
+    this.paymentCurrency,
+    this.paymentReference,
+  });
+
+  final Appointment appointment;
+  final String paymentStatus;
+  final String paymentMethod;
+  final double? paymentAmount;
+  final String? paymentCurrency;
+  final String? paymentReference;
+
+  bool get paymentSucceeded => paymentStatus == 'successful';
 }
 
 @immutable

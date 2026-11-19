@@ -27,4 +27,32 @@ replay_pid*.log
 
 # Dependencies
 node_modules/
-coverage/
+.vercel
+.env*
+
+# secrets
+android/key.properties
+*.jks
+*.keystore
+.env
+.env.*
+*.pem
+google-services.json
+GoogleService-Info.plist
+.venv/
+.vercel/
+build/
+lesson_audio_review/
+
+# secrets
+android/key.properties
+*.jks
+*.keystore
+.env
+.env.*
+*.pem
+.venv/
+.vercel/
+build/
+.dart_tool/
+lesson_audio_review/

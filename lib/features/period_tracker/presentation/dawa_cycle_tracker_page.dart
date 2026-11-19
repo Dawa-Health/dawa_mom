@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import '/localization/dawa_localized_material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -9,9 +12,13 @@ import '/content/dawa_learning_asset_registry.dart';
 import '/design_system/dawa_components.dart';
 import '/design_system/dawa_contextual_image.dart';
 import '/design_system/dawa_design_tokens.dart';
+import '/design_system/dawa_interactions.dart';
 import '/design_system/dawa_page_scaffold.dart';
 import '/features/period_tracker/domain/period_cycle_summary.dart';
+import '/features/feedback/dawa_success_feedback.dart';
 import '/features/profile/data/health_profile_repository.dart';
+import '/features/period_tracker/presentation/dawa_daily_check_in_sheet.dart';
+import '/features/pregnancy/presentation/dawa_pregnancy_journey_overview.dart';
 
 class DawaCycleTrackerPage extends StatefulWidget {
   const DawaCycleTrackerPage({
@@ -35,6 +42,8 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
   DateTime _selectedDay = DateTime.now();
   bool _pregnancyTab = false;
   bool _periodActionBusy = false;
+  _TrackerRoutineFeedback? _routineFeedback;
+  Timer? _feedbackTimer;
 
   @override
   void initState() {
@@ -50,11 +59,26 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
   void dispose() {
     PeriodTrackerService.changes.removeListener(_onChanged);
     HealthProfileRepository.changes.removeListener(_onChanged);
+    _feedbackTimer?.cancel();
     super.dispose();
   }
 
   void _onChanged() {
-    if (mounted) _refresh();
+    if (!mounted || _periodActionBusy) return;
+    unawaited(_refreshAfterExternalChange());
+  }
+
+  Future<void> _refreshAfterExternalChange() async {
+    try {
+      await _refresh();
+    } catch (error, stackTrace) {
+      _logPeriodDiagnostic(
+        operation: 'period_tracker_change',
+        stage: 'refresh',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   Future<_CyclePageData> _load() async {
@@ -65,7 +89,7 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
     ]);
     final settings = results[0] as Map<String, dynamic>?;
     final history = results[1] as List<PeriodRecord>;
-    return _CyclePageData(
+    final data = _CyclePageData(
       settings: settings,
       history: history,
       profile: results[2] as HealthProfileSnapshot,
@@ -75,12 +99,31 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
         history: history,
       ),
     );
+    return data;
   }
 
-  Future<void> _refresh() async {
+  Future<void> _refresh({bool preserveCurrentOnFailure = false}) async {
+    if (!mounted) return;
     final next = _load();
-    setState(() => _data = next);
-    await next;
+    if (!preserveCurrentOnFailure) {
+      setState(() {
+        _data = next;
+      });
+    }
+    try {
+      final loaded = await next;
+      if (preserveCurrentOnFailure && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              _data = Future.value(loaded);
+            });
+          }
+        });
+      }
+    } catch (_) {
+      rethrow;
+    }
   }
 
   Future<void> _setup(_CyclePageData data) async {
@@ -93,7 +136,7 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
       initialIsRegular: data.settings?['isRegular'] as bool? ?? true,
     );
     if (result != null && result != PeriodSetupOutcome.back && mounted) {
-      await _refresh();
+      await _refresh(preserveCurrentOnFailure: true);
     }
   }
 
@@ -123,52 +166,95 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
       },
     );
     if (saved && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Check-in saved for ${DateFormat('d MMMM').format(_selectedDay)}.',
-          ),
+      _showRoutineFeedback(
+        title: 'Check-in saved',
+        message:
+            'Your health log has been updated for ${DateFormat('d MMMM').format(_selectedDay)}.',
+      );
+      unawaited(
+        DawaSuccessFeedbackController.show(
+          context,
+          DawaSuccessFeedback.checkInSaved,
         ),
       );
       await _refresh();
     }
   }
 
-  Future<void> _markPeriodStarted(_CyclePageData data) async {
+  Future<void> _markPeriodStarted(
+    _CyclePageData data, {
+    DateTime? startDate,
+  }) async {
     if (_periodActionBusy) return;
     if (!data.summary.isConfigured) {
       await _setup(data);
       return;
     }
     final today = _dateOnly(DateTime.now());
+    final selectedStart = _dateOnly(startDate ?? _selectedDay);
+    if (selectedStart.isAfter(today)) {
+      _showPeriodError('Choose today or an earlier date to log a period.');
+      return;
+    }
     setState(() => _periodActionBusy = true);
+    var writeConfirmed = false;
     try {
-      await _service.savePeriodRecord(startDate: today);
+      await _service.savePeriodRecord(startDate: selectedStart);
+      writeConfirmed = true;
       if (!mounted) return;
       setState(() {
-        _selectedDay = today;
-        _focusedDay = today;
+        _selectedDay = selectedStart;
+        _focusedDay = selectedStart;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Period start saved for today.'),
-          action: SnackBarAction(
-            label: 'Change date',
-            onPressed: () => _changePeriodStartDate(today),
-          ),
+      _showRoutineFeedback(
+        title: 'Period started',
+        message:
+            "We'll update your cycle from ${DateFormat('d MMMM').format(selectedStart)}.",
+        actionLabel: 'Change date',
+        onAction: () {
+          _changePeriodStartDate(selectedStart);
+        },
+      );
+      unawaited(
+        DawaSuccessFeedbackController.show(
+          context,
+          DawaSuccessFeedback.periodStarted,
         ),
       );
-      await _refresh();
+    } on PeriodTrackerPersistenceException catch (error, stackTrace) {
+      _logPeriodDiagnostic(
+        operation: error.operation,
+        stage: error.stage,
+        error: error,
+        stackTrace: stackTrace,
+      );
+      writeConfirmed = error.writeConfirmed;
+      if (writeConfirmed && mounted) {
+        setState(() {
+          _selectedDay = selectedStart;
+          _focusedDay = selectedStart;
+        });
+        _showRoutineFeedback(title: 'Period saved', message: error.message);
+      } else if (mounted) {
+        _showPeriodError(error.message);
+      }
     } on PeriodTrackerException catch (error) {
       if (mounted) _showPeriodError(error.message);
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _logPeriodDiagnostic(
+        operation: 'save_period_record',
+        stage: 'unexpected',
+        error: error,
+        stackTrace: stackTrace,
+      );
       if (mounted) {
-        _showPeriodError(
-          'Your period start could not be saved. Check your connection and try again.',
-        );
+        _showPeriodError('Your period could not be saved. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _periodActionBusy = false);
+    }
+    if (writeConfirmed && mounted) {
+      await _refreshAfterConfirmedPeriodWrite(operation: 'save_period_record');
     }
   }
 
@@ -186,28 +272,53 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
       return;
     }
     setState(() => _periodActionBusy = true);
+    var writeConfirmed = false;
     try {
       await _service.updatePeriodRecord(
         originalStartDate: originalDate,
         startDate: selected,
       );
+      writeConfirmed = true;
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Period start changed to ${DateFormat('d MMMM').format(selected)}.',
-          ),
-        ),
+      setState(() {
+        _selectedDay = selected;
+        _focusedDay = selected;
+      });
+      _showRoutineFeedback(
+        title: 'Cycle updated',
+        message:
+            'Your period start is now ${DateFormat('d MMMM').format(selected)}.',
       );
-      await _refresh();
+    } on PeriodTrackerPersistenceException catch (error, stackTrace) {
+      _logPeriodDiagnostic(
+        operation: error.operation,
+        stage: error.stage,
+        error: error,
+        stackTrace: stackTrace,
+      );
+      writeConfirmed = error.writeConfirmed;
+      if (writeConfirmed && mounted) {
+        _showRoutineFeedback(title: 'Period saved', message: error.message);
+      } else if (mounted) {
+        _showPeriodError(error.message);
+      }
     } on PeriodTrackerException catch (error) {
       if (mounted) _showPeriodError(error.message);
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _logPeriodDiagnostic(
+        operation: 'change_period_start',
+        stage: 'unexpected',
+        error: error,
+        stackTrace: stackTrace,
+      );
       if (mounted) {
         _showPeriodError('The date could not be changed. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _periodActionBusy = false);
+    }
+    if (writeConfirmed && mounted) {
+      await _refreshAfterConfirmedPeriodWrite(operation: 'change_period_start');
     }
   }
 
@@ -217,29 +328,106 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
       ..sort((a, b) => b.startDate.compareTo(a.startDate));
     final current = latest.first;
     final today = _dateOnly(DateTime.now());
+    final selectedEnd = _dateOnly(_selectedDay);
+    if (selectedEnd.isAfter(today)) {
+      _showPeriodError('Choose today or an earlier date to end a period.');
+      return;
+    }
+    if (selectedEnd.isBefore(_dateOnly(current.startDate))) {
+      _showPeriodError('The period end date cannot be before its start date.');
+      return;
+    }
     setState(() => _periodActionBusy = true);
+    var writeConfirmed = false;
     try {
       await _service.updatePeriodRecord(
         originalStartDate: current.startDate,
         startDate: current.startDate,
-        endDate: today,
+        endDate: selectedEnd,
       );
+      writeConfirmed = true;
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Period end saved for today.')),
+      _showRoutineFeedback(
+        title: 'Period ended',
+        message:
+            'Your cycle history has been updated through ${DateFormat('d MMMM').format(selectedEnd)}.',
       );
-      await _refresh();
+      unawaited(
+        DawaSuccessFeedbackController.show(
+          context,
+          DawaSuccessFeedback.periodEnded,
+        ),
+      );
+    } on PeriodTrackerPersistenceException catch (error, stackTrace) {
+      _logPeriodDiagnostic(
+        operation: error.operation,
+        stage: error.stage,
+        error: error,
+        stackTrace: stackTrace,
+      );
+      writeConfirmed = error.writeConfirmed;
+      if (writeConfirmed && mounted) {
+        _showRoutineFeedback(title: 'Period saved', message: error.message);
+      } else if (mounted) {
+        _showPeriodError(error.message);
+      }
     } on PeriodTrackerException catch (error) {
       if (mounted) _showPeriodError(error.message);
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _logPeriodDiagnostic(
+        operation: 'end_period_record',
+        stage: 'unexpected',
+        error: error,
+        stackTrace: stackTrace,
+      );
       if (mounted) {
-        _showPeriodError(
-          'Your period end could not be saved. Check your connection and try again.',
-        );
+        _showPeriodError('Your period could not be saved. Please try again.');
       }
     } finally {
       if (mounted) setState(() => _periodActionBusy = false);
     }
+    if (writeConfirmed && mounted) {
+      await _refreshAfterConfirmedPeriodWrite(operation: 'end_period_record');
+    }
+  }
+
+  Future<void> _refreshAfterConfirmedPeriodWrite({
+    required String operation,
+  }) async {
+    try {
+      await _refresh(preserveCurrentOnFailure: true);
+    } catch (error, stackTrace) {
+      _logPeriodDiagnostic(
+        operation: operation,
+        stage: 'post_write_refresh',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (mounted) {
+        _showRoutineFeedback(
+          title: 'Period saved',
+          message:
+              'Your period was saved. We could not refresh the cycle view yet.',
+        );
+      }
+    }
+  }
+
+  void _logPeriodDiagnostic({
+    required String operation,
+    required String stage,
+    required Object error,
+    required StackTrace stackTrace,
+  }) {
+    debugPrint(
+      '[CycleTracker] operation=$operation stage=$stage '
+      'error_type=${error.runtimeType}',
+    );
+    debugPrintStack(
+      label: '[CycleTracker] $operation/$stage',
+      stackTrace: stackTrace,
+      maxFrames: 8,
+    );
   }
 
   void _showPeriodError(String message) {
@@ -249,6 +437,31 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
         backgroundColor: DawaColors.danger,
       ),
     );
+  }
+
+  void _showRoutineFeedback({
+    required String title,
+    required String message,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
+    _feedbackTimer?.cancel();
+    setState(
+      () => _routineFeedback = _TrackerRoutineFeedback(
+        title: title,
+        message: message,
+        actionLabel: actionLabel,
+        onAction: onAction,
+      ),
+    );
+    _feedbackTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted) setState(() => _routineFeedback = null);
+    });
+  }
+
+  void _dismissRoutineFeedback() {
+    _feedbackTimer?.cancel();
+    setState(() => _routineFeedback = null);
   }
 
   @override
@@ -289,43 +502,33 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
           return RefreshIndicator(
             onRefresh: _refresh,
             child: DawaPageScaffold(
-              bottomNavigationBar:
-                  _pregnancyTab ? null : _buildLogTodayAction(context),
               child: _buildContent(context, data),
             ),
           );
         },
       );
 
-  Widget _buildLogTodayAction(BuildContext context) => Material(
-        color: DawaColors.canvas,
-        elevation: 2,
-        shadowColor: DawaColors.primary.withValues(alpha: .12),
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              DawaBreakpoints.pagePadding(context),
-              8,
-              DawaBreakpoints.pagePadding(context),
-              10,
+  Widget _buildLogTodayAction(BuildContext context) => Padding(
+        padding: EdgeInsets.fromLTRB(
+          DawaBreakpoints.pagePadding(context),
+          DawaSpacing.sm,
+          DawaBreakpoints.pagePadding(context),
+          0,
+        ),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: DawaBreakpoints.isMobile(context) ? 420 : 260,
             ),
-            child: Align(
-              alignment: Alignment.centerRight,
-              heightFactor: 1,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: DawaBreakpoints.isMobile(context) ? 420 : 260,
-                ),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    key: const ValueKey('cycle-log-today-action'),
-                    onPressed: _checkIn,
-                    icon: const Icon(Icons.add_task_rounded),
-                    label: const Text('Log today'),
-                  ),
-                ),
+            child: SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: FilledButton.icon(
+                key: const ValueKey('cycle-log-today-action'),
+                onPressed: _checkIn,
+                icon: const Icon(Icons.add_task_rounded),
+                label: const Text('Log today'),
               ),
             ),
           ),
@@ -340,10 +543,20 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
         DawaAppHeader(
           title:
               DawaBreakpoints.isMobile(context) ? 'Track' : 'Track your cycle',
-          notificationUnread: true,
           onNotifications: () => context.push('/notifications'),
           onProfile: () => context.go('/settings'),
         ),
+        if (_routineFeedback != null) ...[
+          const SizedBox(height: DawaSpacing.xs),
+          DawaActionFeedback(
+            title: _routineFeedback!.title,
+            message: _routineFeedback!.message,
+            actionLabel: _routineFeedback!.actionLabel,
+            onAction: _routineFeedback!.onAction,
+            dismissLabel: 'Dismiss',
+            onDismiss: _dismissRoutineFeedback,
+          ),
+        ],
         const SizedBox(height: DawaSpacing.xs),
         _TrackerModeSelector(
           pregnancySelected: _pregnancyTab,
@@ -351,7 +564,7 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
         ),
         const SizedBox(height: DawaSpacing.md),
         if (_pregnancyTab) ...[
-          _PregnancyTrackingOverview(profile: data.profile),
+          DawaPregnancyJourneyOverview(profile: data.profile),
         ] else ...[
           if (!summary.isConfigured) ...[
             DawaCard(
@@ -390,11 +603,19 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
             ),
             const SizedBox(height: 12),
           ] else ...[
-            _PeriodQuickActions(
-              periodActive: summary.isPeriodActive,
+            _CycleVisualOverview(
+              summary: summary,
+              selectedDay: _selectedDay,
               busy: _periodActionBusy,
-              onStarted: () => _markPeriodStarted(data),
-              onEnded: () => _markPeriodEnded(data),
+              onSelectedDay: (selected) {
+                setState(() {
+                  _selectedDay = selected;
+                  _focusedDay = selected;
+                });
+              },
+              onPeriodAction: () => summary.isPeriodActive
+                  ? _markPeriodEnded(data)
+                  : _markPeriodStarted(data, startDate: _selectedDay),
             ),
             const SizedBox(height: DawaSpacing.md),
           ],
@@ -530,7 +751,7 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
               label: 'Cycle day',
               value: summary.cycleDay == null
                   ? 'Not available'
-                  : 'Day ${summary.cycleDay}',
+                  : '${summary.cycleDay} of ${summary.averageCycleLength ?? 28} days',
               helper: summary.cycleDay == null
                   ? 'Based on the periods you added'
                   : '${summary.statusLabel} • Usual cycle ${summary.averageCycleLength ?? 28} days',
@@ -617,7 +838,7 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
                 ),
                 const SizedBox(height: DawaSpacing.sm),
                 Text(
-                  'Choose Log today below to record symptoms, pain, mood and a private note.',
+                  'Use Log today below to record symptoms, pain, mood and a private note.',
                   style: context.dawaCaption,
                 ),
               ],
@@ -661,39 +882,32 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
             ),
           ),
           const SizedBox(height: DawaSpacing.md),
-          DawaIllustratedHeroCard(
+          DawaCard(
             key: const ValueKey('cycle-pregnancy-journey-card'),
-            category: 'PREGNANCY JOURNEY',
-            title: data.profile.pregnancyWeek == null
-                ? 'Guides for every stage'
-                : 'Week ${data.profile.pregnancyWeek}',
-            subtitle: data.profile.trimester == null
-                ? 'Clear pregnancy tips and clinic help when you need it.'
-                : '${_ordinal(data.profile.trimester!)} trimester • Guidance matched to this stage.',
-            illustrationPath: data.profile.pregnancyWeek == null
-                ? DawaArtwork.pregnancyEarly
-                : DawaArtwork.pregnancyPhone,
-            primaryActionLabel: 'View pregnancy',
-            onPrimaryAction: () => context.push('/learn/pregnancy'),
-            progress: data.profile.pregnancyWeek == null
-                ? null
-                : data.profile.pregnancyWeek! / 40,
-            progressLabel: data.profile.pregnancyWeek == null
-                ? null
-                : 'Week ${data.profile.pregnancyWeek} of 40',
-            semanticLabel: data.profile.pregnancyWeek == null
-                ? 'Open pregnancy guides'
-                : 'Pregnancy week ${data.profile.pregnancyWeek}',
-          ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: () => _setup(data),
-              icon: const Icon(Icons.settings_outlined, size: 18),
-              label: const Text('Cycle settings and history'),
+            padding: EdgeInsets.zero,
+            color: DawaColors.softPurple,
+            borderColor: DawaColors.purple.withValues(alpha: .2),
+            child: DawaActionRow(
+              icon: Icons.pregnant_woman_rounded,
+              color: DawaColors.purple,
+              title: 'Pregnancy guidance',
+              subtitle: data.profile.pregnancyWeek == null
+                  ? 'Clear tips and clinic help for every stage.'
+                  : 'Week ${data.profile.pregnancyWeek} • ${_ordinal(data.profile.trimester ?? 1)} trimester',
+              onTap: () => context.push('/learn/pregnancy'),
             ),
           ),
+          const SizedBox(height: DawaSpacing.sm),
+          DawaCard(
+            padding: EdgeInsets.zero,
+            child: DawaActionRow(
+              icon: Icons.settings_outlined,
+              title: 'Cycle settings and history',
+              subtitle: 'Review dates and adjust your usual cycle.',
+              onTap: () => _setup(data),
+            ),
+          ),
+          _buildLogTodayAction(context),
         ],
       ],
     );
@@ -726,101 +940,395 @@ class _DawaCycleTrackerPageState extends State<DawaCycleTrackerPage> {
   }
 }
 
-class _PeriodQuickActions extends StatelessWidget {
-  const _PeriodQuickActions({
-    required this.periodActive,
+class _CycleVisualOverview extends StatelessWidget {
+  const _CycleVisualOverview({
+    required this.summary,
+    required this.selectedDay,
     required this.busy,
-    required this.onStarted,
-    required this.onEnded,
+    required this.onSelectedDay,
+    required this.onPeriodAction,
   });
 
-  final bool periodActive;
+  final PeriodCycleSummary summary;
+  final DateTime selectedDay;
   final bool busy;
-  final VoidCallback onStarted;
-  final VoidCallback onEnded;
+  final ValueChanged<DateTime> onSelectedDay;
+  final VoidCallback onPeriodAction;
 
   @override
-  Widget build(BuildContext context) => DawaCard(
-        color: periodActive ? DawaColors.softPink : DawaColors.softBlue,
-        borderColor: periodActive ? DawaColors.pink : DawaColors.primary,
+  Widget build(BuildContext context) {
+    final phase = _CyclePhase.fromSummary(summary);
+    final cycleLength = summary.averageCycleLength ?? 28;
+    final periodLength = summary.averagePeriodLength ?? 5;
+    final day = summary.cycleDay ?? 1;
+    final actionLabel = summary.isPeriodActive ? 'End period' : 'Log period';
+
+    return Semantics(
+      label:
+          'Cycle overview. Day $day of $cycleLength. ${phase.label}. ${phase.detail}',
+      child: DawaCard(
+        key: const ValueKey('cycle-ring-hero'),
+        featured: true,
+        color: DawaColors.surface,
+        borderColor: phase.color.withValues(alpha: .25),
+        padding: const EdgeInsets.all(DawaSpacing.md),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
                 DawaIconBadge(
-                  icon: Icons.water_drop_rounded,
-                  color: periodActive ? DawaColors.pink : DawaColors.primary,
+                  icon: Icons.auto_graph_rounded,
+                  color: phase.color,
+                  background: phase.color.withValues(alpha: .10),
+                  size: 42,
                 ),
                 const SizedBox(width: DawaSpacing.sm),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        periodActive
-                            ? 'Your period is in progress'
-                            : 'Quick period logging',
-                        style: context.dawaSectionTitle,
-                      ),
-                      Text(
-                        periodActive
-                            ? 'End it today or use Log today for symptoms and flow.'
-                            : 'Record the first day now. You can change the date afterward.',
-                        style: context.dawaCaption,
-                      ),
+                      Text('YOUR CYCLE TODAY',
+                          style: context.dawaCaption.copyWith(
+                            color: phase.color,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: .7,
+                          )),
+                      const SizedBox(height: 2),
+                      Text('A clearer view of your cycle',
+                          style: context.dawaSectionTitle),
                     ],
                   ),
                 ),
               ],
             ),
             const SizedBox(height: DawaSpacing.sm),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final start = OutlinedButton.icon(
-                  key: const ValueKey('period-start-action'),
-                  onPressed: busy || periodActive ? null : onStarted,
-                  icon: const Icon(Icons.play_circle_outline_rounded),
-                  label: Text(
-                    periodActive ? 'Period started' : 'My period started',
+            _CycleWeekStrip(
+              selectedDay: selectedDay,
+              onSelected: onSelectedDay,
+            ),
+            const SizedBox(height: DawaSpacing.xs),
+            SizedBox(
+              height: 224,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  RepaintBoundary(
+                    child: CustomPaint(
+                      size: const Size.square(224),
+                      painter: _CycleRingPainter(
+                        cycleLength: cycleLength,
+                        periodLength: periodLength,
+                        cycleDay: day,
+                        showFertileWindow: summary.isRegular == true,
+                        phaseColor: phase.color,
+                      ),
+                    ),
                   ),
-                );
-                final end = FilledButton.icon(
-                  key: const ValueKey('period-end-action'),
-                  onPressed: busy || !periodActive ? null : onEnded,
-                  icon: busy
-                      ? const SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          phase.label,
+                          textAlign: TextAlign.center,
+                          style: context.dawaCaption.copyWith(
+                            color: DawaColors.textSecondary,
+                            fontWeight: FontWeight.w600,
                           ),
-                        )
-                      : const Icon(Icons.stop_circle_outlined),
-                  label: const Text('My period ended'),
-                );
-                if (constraints.maxWidth < 430) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      start,
-                      const SizedBox(height: DawaSpacing.xs),
-                      end,
-                    ],
-                  );
-                }
-                return Row(
-                  children: [
-                    Expanded(child: start),
-                    const SizedBox(width: DawaSpacing.xs),
-                    Expanded(child: end),
-                  ],
-                );
-              },
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Day $day',
+                          style: context.dawaTitle.copyWith(fontSize: 30),
+                        ),
+                        const SizedBox(height: 1),
+                        Text(
+                          phase.detail,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: context.dawaCaption,
+                        ),
+                        const SizedBox(height: DawaSpacing.sm),
+                        SizedBox(
+                          width: 152,
+                          height: 42,
+                          child: KeyedSubtree(
+                            key: ValueKey(summary.isPeriodActive
+                                ? 'period-end-action'
+                                : 'period-start-action'),
+                            child: FilledButton.icon(
+                              onPressed: busy ? null : onPeriodAction,
+                              icon: Icon(summary.isPeriodActive
+                                  ? Icons.stop_circle_outlined
+                                  : Icons.water_drop_outlined),
+                              label: Text(
+                                actionLabel,
+                                style: const TextStyle(
+                                  fontFamily: 'Poppins',
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: DawaColors.surface,
+                                ),
+                              ),
+                              style: FilledButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: DawaSpacing.xs,
+                                ),
+                                textStyle: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Wrap(
+              alignment: WrapAlignment.center,
+              spacing: DawaSpacing.sm,
+              runSpacing: DawaSpacing.xxs,
+              children: [
+                _LegendDot(color: DawaColors.pink, label: 'Period'),
+                _LegendDot(
+                  color: DawaColors.green,
+                  label: 'Estimated fertile window',
+                ),
+                _LegendDot(color: DawaColors.primary, label: 'Today'),
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _CycleWeekStrip extends StatelessWidget {
+  const _CycleWeekStrip({
+    required this.selectedDay,
+    required this.onSelected,
+  });
+
+  final DateTime selectedDay;
+  final ValueChanged<DateTime> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final today = _dateOnly(DateTime.now());
+    return Row(
+      children: List<Widget>.generate(7, (index) {
+        final date = _dateOnly(selectedDay.add(Duration(days: index - 3)));
+        final selected = isSameDay(date, selectedDay);
+        final isToday = isSameDay(date, today);
+        return Expanded(
+          child: Semantics(
+            button: true,
+            selected: selected,
+            label:
+                '${DateFormat('EEEE, d MMMM').format(date)}${isToday ? ', today' : ''}',
+            child: InkWell(
+              key: ValueKey(
+                  'cycle-week-day-${PeriodTrackerService.formatDateId(date)}'),
+              borderRadius: BorderRadius.circular(DawaRadii.medium),
+              onTap: () => onSelected(date),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+                padding: const EdgeInsets.symmetric(vertical: 7),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? DawaColors.primary
+                      : isToday
+                          ? DawaColors.softBlue
+                          : Colors.transparent,
+                  border: Border.all(
+                    color: selected
+                        ? DawaColors.primary
+                        : isToday
+                            ? DawaColors.primary.withValues(alpha: .32)
+                            : Colors.transparent,
+                  ),
+                  borderRadius: BorderRadius.circular(DawaRadii.medium),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      DateFormat('E').format(date).substring(0, 1),
+                      style: context.dawaCaption.copyWith(
+                        color: selected
+                            ? DawaColors.surface
+                            : DawaColors.textSecondary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${date.day}',
+                      style: context.dawaBody.copyWith(
+                        color: selected ? DawaColors.surface : DawaColors.ink,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+}
+
+class _CyclePhase {
+  const _CyclePhase({
+    required this.label,
+    required this.detail,
+    required this.color,
+  });
+
+  final String label;
+  final String detail;
+  final Color color;
+
+  factory _CyclePhase.fromSummary(PeriodCycleSummary summary) {
+    if (summary.isPeriodActive) {
+      return const _CyclePhase(
+        label: 'Period phase',
+        detail: 'Your period is in progress',
+        color: DawaColors.pink,
       );
+    }
+    final cycleLength = summary.averageCycleLength ?? 28;
+    final cycleDay = summary.cycleDay ?? 1;
+    final ovulationDay = cycleLength - 14;
+    if (summary.isRegular == true &&
+        cycleDay >= ovulationDay - 5 &&
+        cycleDay <= ovulationDay + 1) {
+      return const _CyclePhase(
+        label: 'Estimated fertile window',
+        detail: 'An estimate based on your cycle pattern',
+        color: DawaColors.green,
+      );
+    }
+    final days = summary.daysUntilNextPeriod;
+    return _CyclePhase(
+      label: summary.statusLabel,
+      detail: days == null
+          ? 'Add more period dates for an estimate'
+          : days == 0
+              ? 'Your next period is estimated today'
+              : 'Next period estimate in $days ${days == 1 ? 'day' : 'days'}',
+      color: DawaColors.primary,
+    );
+  }
+}
+
+class _CycleRingPainter extends CustomPainter {
+  const _CycleRingPainter({
+    required this.cycleLength,
+    required this.periodLength,
+    required this.cycleDay,
+    required this.showFertileWindow,
+    required this.phaseColor,
+  });
+
+  final int cycleLength;
+  final int periodLength;
+  final int cycleDay;
+  final bool showFertileWindow;
+  final Color phaseColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.shortestSide / 2 - 20;
+    final ringRect = Rect.fromCircle(center: center, radius: radius);
+    const startAngle = -math.pi / 2;
+    final safeCycleLength = cycleLength.clamp(21, 45);
+    final dayAngle = 2 * math.pi / safeCycleLength;
+    final basePaint = Paint()
+      ..color = DawaColors.line.withValues(alpha: .72)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 11
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(ringRect, 0, 2 * math.pi, false, basePaint);
+
+    void drawArc(int startDay, int length, Color color) {
+      final boundedStart = startDay.clamp(1, safeCycleLength);
+      final boundedLength = length.clamp(0, safeCycleLength);
+      if (boundedLength == 0) return;
+      final paint = Paint()
+        ..color = color.withValues(alpha: .84)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 11
+        ..strokeCap = StrokeCap.round;
+      canvas.drawArc(
+        ringRect,
+        startAngle + (boundedStart - 1) * dayAngle,
+        math.min(boundedLength * dayAngle - .025, 2 * math.pi - .025),
+        false,
+        paint,
+      );
+    }
+
+    drawArc(1, periodLength, DawaColors.pink);
+    if (showFertileWindow) {
+      drawArc(safeCycleLength - 19, 7, DawaColors.green);
+    }
+
+    final markerAngle =
+        startAngle + ((cycleDay.clamp(1, safeCycleLength) - 1) * dayAngle);
+    final markerCenter = Offset(
+      center.dx + math.cos(markerAngle) * radius,
+      center.dy + math.sin(markerAngle) * radius,
+    );
+    canvas.drawCircle(
+      markerCenter,
+      9,
+      Paint()..color = DawaColors.surface,
+    );
+    canvas.drawCircle(markerCenter, 6, Paint()..color = phaseColor);
+
+    for (var day = 1; day <= safeCycleLength; day++) {
+      final angle = startAngle + (day - 1) * dayAngle;
+      final majorTick = day == 1 || day % 4 == 0 || day == safeCycleLength;
+      final tickStart = radius + (majorTick ? 15 : 17);
+      final tickEnd = tickStart + (majorTick ? 6 : 3);
+      final tickPaint = Paint()
+        ..color = DawaColors.textSecondary.withValues(
+          alpha: majorTick ? .78 : .34,
+        )
+        ..strokeWidth = majorTick ? 2.4 : 1.4
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(
+        Offset(
+          center.dx + math.cos(angle) * tickStart,
+          center.dy + math.sin(angle) * tickStart,
+        ),
+        Offset(
+          center.dx + math.cos(angle) * tickEnd,
+          center.dy + math.sin(angle) * tickEnd,
+        ),
+        tickPaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CycleRingPainter oldDelegate) =>
+      cycleLength != oldDelegate.cycleLength ||
+      periodLength != oldDelegate.periodLength ||
+      cycleDay != oldDelegate.cycleDay ||
+      showFertileWindow != oldDelegate.showFertileWindow ||
+      phaseColor != oldDelegate.phaseColor;
 }
 
 class _TrackerModeSelector extends StatelessWidget {
@@ -836,90 +1344,25 @@ class _TrackerModeSelector extends StatelessWidget {
   Widget build(BuildContext context) => Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 460),
-          child: DawaCard(
-            padding: const EdgeInsets.all(DawaSpacing.xxs),
-            radius: DawaRadii.pill,
-            child: Row(
-              children: [
-                Expanded(
-                  child: _TrackerModeOption(
-                    label: 'Cycle',
-                    icon: Icons.sync_rounded,
-                    selected: !pregnancySelected,
-                    onTap: () => onChanged(false),
-                  ),
-                ),
-                const SizedBox(width: DawaSpacing.xxs),
-                Expanded(
-                  child: _TrackerModeOption(
-                    label: 'Pregnancy',
-                    icon: Icons.pregnant_woman_rounded,
-                    selected: pregnancySelected,
-                    onTap: () => onChanged(true),
-                  ),
-                ),
-              ],
-            ),
+          child: DawaSegmentedControl(
+            keyPrefix: 'track-mode',
+            selectedIndex: pregnancySelected ? 1 : 0,
+            onSelected: (index) => onChanged(index == 1),
+            items: const [
+              DawaSegmentedItem(label: 'Cycle', icon: Icons.sync_rounded),
+              DawaSegmentedItem(
+                label: 'Pregnancy',
+                icon: Icons.pregnant_woman_rounded,
+              ),
+            ],
           ),
         ),
       );
 }
 
-class _TrackerModeOption extends StatelessWidget {
-  const _TrackerModeOption({
-    required this.label,
-    required this.icon,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-        button: true,
-        selected: selected,
-        label: '$label tracking',
-        child: Material(
-          color: selected ? DawaColors.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(DawaRadii.pill),
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(DawaRadii.pill),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: DawaSpacing.sm,
-                vertical: DawaSpacing.sm,
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    icon,
-                    size: 20,
-                    color: selected ? Colors.white : DawaColors.muted,
-                  ),
-                  const SizedBox(width: DawaSpacing.xs),
-                  Flexible(
-                    child: Text(
-                      label,
-                      style: context.dawaBody.copyWith(
-                        color: selected ? Colors.white : DawaColors.muted,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-}
-
+// Retained temporarily for the existing setup illustration composition while
+// the interactive journey lives in its dedicated presentation component.
+// ignore: unused_element
 class _PregnancyTrackingOverview extends StatelessWidget {
   const _PregnancyTrackingOverview({required this.profile});
 
@@ -931,6 +1374,99 @@ class _PregnancyTrackingOverview extends StatelessWidget {
     final dueDate = profile.calculatedDueDate;
     final configured = profile.pregnancyProfileStatus ==
         PregnancyProfileStatus.pregnantWithData;
+    if (!configured) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DawaCard(
+            key: const ValueKey('pregnancy-tracking-hero'),
+            featured: true,
+            showPattern: true,
+            color: DawaColors.softPurple,
+            borderColor: DawaColors.purple.withValues(alpha: .2),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'YOUR PREGNANCY',
+                        style: context.dawaCaption.copyWith(
+                          color: DawaColors.purple,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: DawaSpacing.xxs),
+                      Text('Set up pregnancy tracking',
+                          style: context.dawaTitle),
+                      const SizedBox(height: DawaSpacing.xs),
+                      Text(
+                        'Add a last period or due date to see guidance for your stage.',
+                        style: context.dawaCaption,
+                      ),
+                      const SizedBox(height: DawaSpacing.sm),
+                      DawaCompactButton(
+                        label: 'Add pregnancy details',
+                        icon: Icons.arrow_forward_rounded,
+                        filled: true,
+                        onPressed: () => context.push('/settings'),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: DawaSpacing.xs),
+                SizedBox(
+                  width: 92,
+                  height: 132,
+                  child: Image.asset(
+                    DawaArtwork.pregnancyEarly,
+                    fit: BoxFit.contain,
+                    excludeFromSemantics: true,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: DawaSpacing.md),
+          Text('After setup you’ll see', style: context.dawaSectionTitle),
+          const SizedBox(height: DawaSpacing.xs),
+          DawaCard(
+            padding: const EdgeInsets.symmetric(vertical: DawaSpacing.xxs),
+            child: const Column(
+              children: [
+                _PregnancySetupBenefit(
+                  icon: Icons.calendar_today_outlined,
+                  title: 'Current pregnancy week',
+                ),
+                Divider(height: 1),
+                _PregnancySetupBenefit(
+                  icon: Icons.timelapse_rounded,
+                  title: 'Trimester and estimated due date',
+                ),
+                Divider(height: 1),
+                _PregnancySetupBenefit(
+                  icon: Icons.menu_book_outlined,
+                  title: 'Guidance relevant to your stage',
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: DawaSpacing.sm),
+          DawaCard(
+            padding: EdgeInsets.zero,
+            child: DawaActionRow(
+              icon: Icons.auto_stories_outlined,
+              color: DawaColors.purple,
+              title: 'What to expect',
+              subtitle: 'Read clear guidance for every stage of pregnancy.',
+              onTap: () => context.push('/learn/pregnancy'),
+            ),
+          ),
+        ],
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -957,22 +1493,23 @@ class _PregnancyTrackingOverview extends StatelessWidget {
           tabletColumns: 3,
           desktopColumns: 3,
           children: [
-            _PregnancyMetric(
+            DawaMetricTile(
               icon: Icons.calendar_today_outlined,
               label: 'Current week',
-              value: week?.toString() ?? 'Not set',
+              value: 'Week $week',
+              color: DawaColors.purple,
             ),
-            _PregnancyMetric(
+            DawaMetricTile(
               icon: Icons.timelapse_rounded,
               label: 'Trimester',
-              value: profile.trimester?.toString() ?? 'Not set',
+              value: _ordinal(profile.trimester!),
+              color: DawaColors.purple,
             ),
-            _PregnancyMetric(
+            DawaMetricTile(
               icon: Icons.event_available_outlined,
               label: 'Due date',
-              value: dueDate == null
-                  ? 'Not set'
-                  : DateFormat('d MMM').format(dueDate),
+              value: DateFormat('d MMM').format(dueDate!),
+              color: DawaColors.greenDark,
             ),
           ],
         ),
@@ -1017,25 +1554,24 @@ class _PregnancyTrackingOverview extends StatelessWidget {
   }
 }
 
-class _PregnancyMetric extends StatelessWidget {
-  const _PregnancyMetric({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
+// ignore: unused_element
+class _PregnancySetupBenefit extends StatelessWidget {
+  const _PregnancySetupBenefit({required this.icon, required this.title});
 
   final IconData icon;
-  final String label;
-  final String value;
+  final String title;
 
   @override
-  Widget build(BuildContext context) => DawaCard(
-        child: Column(
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: DawaSpacing.sm,
+          vertical: DawaSpacing.xs,
+        ),
+        child: Row(
           children: [
-            DawaIconBadge(icon: icon, color: DawaColors.green),
-            const SizedBox(height: 8),
-            Text(label, style: context.dawaCaption),
-            Text(value, style: context.dawaTitle),
+            Icon(icon, color: DawaColors.greenDark, size: 20),
+            const SizedBox(width: DawaSpacing.sm),
+            Expanded(child: Text(title, style: context.dawaBody)),
           ],
         ),
       );
@@ -1098,33 +1634,43 @@ class _CycleSummaryCards extends StatelessWidget {
   final Widget fertileWindow;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-        builder: (context, constraints) {
-          const gap = DawaSpacing.xs;
-          if (constraints.maxWidth < 600) {
-            final half = (constraints.maxWidth - gap) / 2;
-            return Wrap(
-              spacing: gap,
-              runSpacing: gap,
-              children: [
-                SizedBox(width: half, child: nextPeriod),
-                SizedBox(width: half, child: cycleDay),
-                SizedBox(width: constraints.maxWidth, child: fertileWindow),
-              ],
-            );
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(child: nextPeriod),
-              const SizedBox(width: gap),
-              Expanded(child: cycleDay),
-              const SizedBox(width: gap),
-              Expanded(child: fertileWindow),
-            ],
-          );
-        },
+  Widget build(BuildContext context) => DawaCard(
+        padding: const EdgeInsets.all(DawaSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Cycle outlook', style: context.dawaSectionTitle),
+            const SizedBox(height: DawaSpacing.sm),
+            _CycleOutlookRow(child: cycleDay),
+            const Divider(height: 20, color: DawaColors.line),
+            _CycleOutlookRow(child: nextPeriod),
+            const Divider(height: 20, color: DawaColors.line),
+            _CycleOutlookRow(child: fertileWindow),
+          ],
+        ),
       );
+}
+
+class _CycleOutlookRow extends StatelessWidget {
+  const _CycleOutlookRow({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => child is _CycleMetric
+      ? Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              (child as _CycleMetric).icon,
+              color: (child as _CycleMetric).color,
+              size: 20,
+            ),
+            const SizedBox(width: DawaSpacing.sm),
+            Expanded(child: child),
+          ],
+        )
+      : child;
 }
 
 class _CycleMetric extends StatelessWidget {
@@ -1145,41 +1691,27 @@ class _CycleMetric extends StatelessWidget {
   final String helper;
 
   @override
-  Widget build(BuildContext context) => DawaCard(
-        color: surface,
-        borderColor: color.withValues(alpha: 0.24),
-        padding: const EdgeInsets.all(DawaSpacing.sm),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                DawaIconBadge(icon: icon, color: color, size: 38),
-                const SizedBox(width: DawaSpacing.xs),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: context.dawaCaption.copyWith(
-                      color: DawaColors.ink,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: context.dawaCaption.copyWith(
+              color: DawaColors.ink,
+              fontWeight: FontWeight.w600,
             ),
-            const SizedBox(height: DawaSpacing.xs),
-            Text(
-              value,
-              style: context.dawaSectionTitle.copyWith(color: color),
-            ),
-            const SizedBox(height: DawaSpacing.xxs),
-            Text(
-              helper,
-              style: context.dawaCaption,
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(height: DawaSpacing.xs),
+          Text(
+            value,
+            style: context.dawaSectionTitle.copyWith(color: color),
+          ),
+          const SizedBox(height: DawaSpacing.xxs),
+          Text(
+            helper,
+            style: context.dawaCaption,
+          ),
+        ],
       );
 }
 
@@ -1197,316 +1729,19 @@ class _CyclePageData {
   final PeriodCycleSummary summary;
 }
 
-typedef DawaDailyCheckInSave = Future<void> Function({
-  required List<String> symptoms,
-  required double pain,
-  required String feeling,
-  required String note,
-});
-
-Future<bool> showDawaDailyCheckInSheet(
-  BuildContext context, {
-  required DateTime date,
-  required Map<String, dynamic>? existing,
-  required DawaDailyCheckInSave onSave,
-}) async =>
-    await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.46),
-      builder: (context) => _DawaDailyCheckInSheet(
-        date: date,
-        existing: existing,
-        onSave: onSave,
-      ),
-    ) ??
-    false;
-
-class _DawaDailyCheckInSheet extends StatefulWidget {
-  const _DawaDailyCheckInSheet({
-    required this.date,
-    required this.existing,
-    required this.onSave,
+class _TrackerRoutineFeedback {
+  const _TrackerRoutineFeedback({
+    required this.title,
+    required this.message,
+    this.actionLabel,
+    this.onAction,
   });
 
-  final DateTime date;
-  final Map<String, dynamic>? existing;
-  final DawaDailyCheckInSave onSave;
-
-  @override
-  State<_DawaDailyCheckInSheet> createState() => _DawaDailyCheckInSheetState();
+  final String title;
+  final String message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 }
-
-class _DawaDailyCheckInSheetState extends State<_DawaDailyCheckInSheet> {
-  static const _symptoms = [
-    ('Cramps', Icons.gesture_rounded),
-    ('Headache', Icons.psychology_outlined),
-    ('Nausea', Icons.sick_outlined),
-    ('Discharge', Icons.water_drop_outlined),
-    ('Mood', Icons.sentiment_satisfied_outlined),
-    ('Energy', Icons.bolt_rounded),
-    ('Appetite', Icons.restaurant_outlined),
-    ('Sleep', Icons.bedtime_outlined),
-  ];
-  static const _feelings = ['Great', 'Good', 'Okay', 'Poor', 'Very poor'];
-
-  late final Set<String> _selected;
-  final _note = TextEditingController();
-  double _pain = 1;
-  String _feeling = 'Good';
-  bool _busy = false;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _selected = Set<String>.from(
-      widget.existing?['symptoms'] as List? ?? const [],
-    );
-    final notes =
-        List<String>.from(widget.existing?['notes'] as List? ?? const []);
-    for (final value in notes) {
-      if (value.startsWith('Pain:')) {
-        _pain = double.tryParse(
-              RegExp(r'\d+').firstMatch(value)?.group(0) ?? '',
-            ) ??
-            1;
-      } else if (value.startsWith('Overall feeling:')) {
-        _feeling = value.split(':').last.trim();
-      } else {
-        _note.text = value;
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _note.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      await widget.onSave(
-        symptoms: _selected.toList()..sort(),
-        pain: _pain,
-        feeling: _feeling,
-        note: _note.text,
-      );
-      if (mounted) Navigator.pop(context, true);
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _error = 'Your check-in could not be saved. Please try again.';
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => DawaBottomSheetFrame(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(context).height * 0.88,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      children: [
-                        Text(
-                          'How are you feeling today?',
-                          textAlign: TextAlign.center,
-                          style: context.dawaTitle,
-                        ),
-                        Text(
-                          DateFormat('EEEE, d MMMM').format(widget.date),
-                          style: context.dawaCaption,
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Close check-in',
-                    onPressed:
-                        _busy ? null : () => Navigator.pop(context, false),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Expanded(
-                child: SingleChildScrollView(
-                  keyboardDismissBehavior:
-                      ScrollViewKeyboardDismissBehavior.onDrag,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      DawaCard(
-                        color: DawaColors.softBlue,
-                        child: Row(
-                          children: [
-                            const DawaIconBadge(
-                              icon: Icons.water_drop_rounded,
-                              color: DawaColors.pink,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                'Cycle day check-in • your entries help you notice patterns.',
-                                style: context.dawaCaption,
-                              ),
-                            ),
-                            SizedBox(
-                              width: 62,
-                              height: 74,
-                              child: Image.asset(
-                                DawaArtwork.cycleCramps,
-                                fit: BoxFit.contain,
-                                excludeFromSemantics: true,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Text('Select any symptoms you’re experiencing',
-                          style: context.dawaSectionTitle),
-                      const SizedBox(height: 8),
-                      GridView.count(
-                        crossAxisCount:
-                            MediaQuery.sizeOf(context).width >= 600 ? 4 : 2,
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        mainAxisSpacing: 8,
-                        crossAxisSpacing: 8,
-                        childAspectRatio: 2.8,
-                        children: [
-                          for (final symptom in _symptoms)
-                            FilterChip(
-                              avatar: Icon(symptom.$2, size: 17),
-                              label: Text(symptom.$1),
-                              selected: _selected.contains(symptom.$1),
-                              onSelected: (selected) => setState(() {
-                                selected
-                                    ? _selected.add(symptom.$1)
-                                    : _selected.remove(symptom.$1);
-                              }),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Text('Pain level: ${_pain.round()} out of 10',
-                          style: context.dawaSectionTitle),
-                      Slider(
-                        value: _pain,
-                        min: 1,
-                        max: 10,
-                        divisions: 9,
-                        label: '${_pain.round()}',
-                        onChanged: (value) => setState(() => _pain = value),
-                      ),
-                      TextField(
-                        controller: _note,
-                        maxLength: 250,
-                        maxLines: 3,
-                        decoration: InputDecoration(
-                          labelText: 'Add a note (optional)',
-                          hintText:
-                              'How are you feeling? Add details that may be helpful.',
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text('How would you describe your overall feeling?',
-                          style: context.dawaSectionTitle),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 7,
-                        runSpacing: 7,
-                        children: [
-                          for (final feeling in _feelings)
-                            ChoiceChip(
-                              avatar: Icon(
-                                _feelingIcon(feeling),
-                                color:
-                                    feeling == 'Poor' || feeling == 'Very poor'
-                                        ? DawaColors.danger
-                                        : DawaColors.green,
-                                size: 17,
-                              ),
-                              label: Text(feeling),
-                              selected: _feeling == feeling,
-                              onSelected: (_) =>
-                                  setState(() => _feeling = feeling),
-                            ),
-                        ],
-                      ),
-                      if (_error != null) ...[
-                        const SizedBox(height: 8),
-                        Semantics(
-                          liveRegion: true,
-                          child: Text(
-                            _error!,
-                            style: context.dawaCaption
-                                .copyWith(color: DawaColors.danger),
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 8),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed:
-                          _busy ? null : () => Navigator.pop(context, false),
-                      child: const Text('Cancel'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: _busy ? null : _save,
-                      child: _busy
-                          ? const SizedBox.square(
-                              dimension: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Text('Save log'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      );
-}
-
-IconData _feelingIcon(String feeling) => switch (feeling) {
-      'Great' => Icons.sentiment_very_satisfied_rounded,
-      'Good' => Icons.sentiment_satisfied_rounded,
-      'Okay' => Icons.sentiment_neutral_rounded,
-      'Poor' => Icons.sentiment_dissatisfied_rounded,
-      _ => Icons.sentiment_very_dissatisfied_rounded,
-    };
 
 DateTime _dateOnly(DateTime value) =>
     DateTime(value.year, value.month, value.day);

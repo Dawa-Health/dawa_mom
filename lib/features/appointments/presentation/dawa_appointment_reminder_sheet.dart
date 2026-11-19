@@ -97,11 +97,11 @@ class _DawaAppointmentReminderSheetState
                           ],
                         ),
                       ),
-                      IconButton(
-                        tooltip: 'Close',
+                      DawaIconButton(
+                        icon: Icons.close_rounded,
+                        tooltip: 'Close reminder settings',
                         onPressed:
                             _saving ? null : () => Navigator.pop(context),
-                        icon: const Icon(Icons.close_rounded),
                       ),
                     ],
                   ),
@@ -171,30 +171,25 @@ class _DawaAppointmentReminderSheetState
                             const SizedBox(height: 8),
                             Text('When', style: context.dawaSectionTitle),
                             const SizedBox(height: 8),
-                            SizedBox(
-                              width: double.infinity,
-                              child: SegmentedButton<int>(
-                                segments: const [
-                                  ButtonSegment(
-                                    value: 1,
-                                    label: Text('1 day'),
-                                  ),
-                                  ButtonSegment(
-                                    value: 2,
-                                    label: Text('2 days'),
-                                  ),
-                                  ButtonSegment(
-                                    value: 7,
-                                    label: Text('1 week'),
-                                  ),
-                                ],
-                                selected: {value.daysBefore},
-                                onSelectionChanged: (selection) => setState(
-                                  () => _value = value.copyWith(
-                                    daysBefore: selection.first,
-                                  ),
+                            DawaSegmentedControl(
+                              keyPrefix: 'appointment-reminder-when',
+                              selectedIndex:
+                                  _reminderDayIndex(value.daysBefore),
+                              onSelected: (index) => setState(
+                                () => _value = value.copyWith(
+                                  daysBefore: _reminderDayOptions[index],
                                 ),
                               ),
+                              items: const [
+                                DawaSegmentedItem(
+                                    id: 'on-day', label: 'On day'),
+                                DawaSegmentedItem(
+                                    id: 'one-day', label: '1 day'),
+                                DawaSegmentedItem(
+                                    id: 'two-days', label: '2 days'),
+                                DawaSegmentedItem(
+                                    id: 'one-week', label: '1 week'),
+                              ],
                             ),
                             const SizedBox(height: 16),
                             Text(
@@ -243,6 +238,30 @@ class _DawaAppointmentReminderSheetState
                                     value.copyWith(emailNotification: enabled),
                               ),
                             ),
+                            const SizedBox(height: 8),
+                            DawaCard(
+                              color: DawaColors.softBlue,
+                              borderColor:
+                                  DawaColors.primary.withValues(alpha: 0.16),
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Icon(
+                                    Icons.info_outline_rounded,
+                                    color: DawaColors.primary,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'These choices save your communication preferences. Dawa only treats an SMS or email as delivered when a verified contact and the DAWA backend confirm delivery.',
+                                      style: context.dawaCaption,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ],
                         ],
                       ),
@@ -252,28 +271,21 @@ class _DawaAppointmentReminderSheetState
                   Row(
                     children: [
                       Expanded(
-                        child: OutlinedButton(
+                        child: DawaTextButton(
+                          label: 'Cancel',
+                          fullWidth: true,
+                          compact: true,
                           onPressed:
                               _saving ? null : () => Navigator.pop(context),
-                          child: const Text('Cancel'),
                         ),
                       ),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: DawaSpacing.xs),
                       Expanded(
-                        child: FilledButton.icon(
+                        child: DawaPrimaryButton(
+                          label: 'Save reminder',
+                          icon: Icons.check_rounded,
+                          busy: _saving,
                           onPressed: _saving ? null : _save,
-                          icon: _saving
-                              ? const SizedBox.square(
-                                  dimension: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(Icons.check_rounded, size: 18),
-                          label: Text(
-                            _saving ? 'Saving…' : 'Save reminder',
-                          ),
                         ),
                       ),
                     ],
@@ -284,4 +296,11 @@ class _DawaAppointmentReminderSheetState
           ),
         ),
       );
+}
+
+const _reminderDayOptions = [0, 1, 2, 7];
+
+int _reminderDayIndex(int daysBefore) {
+  final index = _reminderDayOptions.indexOf(daysBefore);
+  return index < 0 ? 0 : index;
 }

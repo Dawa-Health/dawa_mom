@@ -33,11 +33,11 @@ class _DawaOnboardingPageState extends State<DawaOnboardingPage> {
       description:
           'Choose a clinic, health worker and time. DawaMom will remind you.',
       asset: DawaArtwork.clinicianNurse,
-      color: DawaColors.greenDark,
+      color: DawaColors.primary,
       cards: [
-        (Icons.check_circle_rounded, 'Visit booked'),
-        (Icons.medical_services_rounded, 'Health worker'),
-        (Icons.notifications_active_rounded, 'Visit reminder'),
+        (Icons.check_circle_rounded, 'Book a visit'),
+        (Icons.medical_services_rounded, 'Choose a health worker'),
+        (Icons.notifications_active_rounded, 'Get reminders'),
       ],
     ),
     _OnboardingStep(
@@ -46,7 +46,7 @@ class _DawaOnboardingPageState extends State<DawaOnboardingPage> {
       description:
           'Read or listen to short health lessons in the language you chose.',
       asset: DawaArtwork.motherLearning,
-      color: DawaColors.purple,
+      color: DawaColors.primary,
       cards: [
         (Icons.menu_book_rounded, 'Short lessons'),
         (Icons.headphones_rounded, 'Listen'),
@@ -57,9 +57,9 @@ class _DawaOnboardingPageState extends State<DawaOnboardingPage> {
       eyebrow: 'UNDERSTAND YOUR BODY',
       title: 'Know your cycle',
       description:
-          'Add periods and symptoms. See simple dates that help you plan.',
+          'Log periods and symptoms to understand your cycle and estimate upcoming dates.',
       asset: DawaArtwork.cycleCalendar,
-      color: DawaColors.pink,
+      color: DawaColors.primary,
       cards: [
         (Icons.water_drop_rounded, 'Period dates'),
         (Icons.calendar_month_rounded, 'Cycle calendar'),
@@ -68,14 +68,14 @@ class _DawaOnboardingPageState extends State<DawaOnboardingPage> {
     ),
     _OnboardingStep(
       eyebrow: 'HEALTHY HABITS, REWARDED',
-      title: 'Learn, play and earn',
+      title: 'Learn and build healthy habits',
       description:
-          'Play short health games, earn Dawa points and work towards care rewards.',
+          'Complete lessons and activities to earn Dawa points toward eligible care rewards.',
       asset: DawaArtwork.banaCelebrate,
-      color: DawaColors.orange,
+      color: DawaColors.greenDark,
       cards: [
         (Icons.sports_esports_rounded, 'Health games'),
-        (Icons.monetization_on_rounded, '+10 points'),
+        (Icons.star_outline_rounded, 'Dawa points'),
         (Icons.card_giftcard_rounded, 'Care rewards'),
       ],
     ),
@@ -153,8 +153,8 @@ class _DawaOnboardingPageState extends State<DawaOnboardingPage> {
                         children: [
                           const DawaMomLogo(
                             variant: DawaMomLogoVariant.authentication,
-                            size: 68,
-                            width: 122,
+                            size: 56,
+                            width: 104,
                           ),
                           if (_index < _steps.length - 1)
                             Positioned(
@@ -197,15 +197,13 @@ class _DawaOnboardingPageState extends State<DawaOnboardingPage> {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 510),
                       child: Container(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
                         decoration: BoxDecoration(
                           color: DawaColors.surface,
-                          borderRadius:
-                              BorderRadius.circular(DawaRadii.feature),
+                          borderRadius: BorderRadius.circular(DawaRadii.medium),
                           border: Border.all(
                             color: DawaColors.primary.withValues(alpha: 0.12),
                           ),
-                          boxShadow: DawaShadows.floating,
                         ),
                         child: Column(
                           children: [
@@ -223,24 +221,6 @@ class _DawaOnboardingPageState extends State<DawaOnboardingPage> {
                                       letterSpacing: .7,
                                     ),
                                   ),
-                                  const Spacer(),
-                                  for (var i = 0; i < _steps.length; i++)
-                                    AnimatedContainer(
-                                      duration:
-                                          const Duration(milliseconds: 220),
-                                      curve: Curves.easeOutCubic,
-                                      width: i == _index ? 24 : 8,
-                                      height: 8,
-                                      margin: const EdgeInsets.only(left: 6),
-                                      decoration: BoxDecoration(
-                                        color: i == _index
-                                            ? DawaColors.primary
-                                            : i < _index
-                                                ? DawaColors.green
-                                                : DawaColors.line,
-                                        borderRadius: BorderRadius.circular(99),
-                                      ),
-                                    ),
                                 ],
                               ),
                             ),
@@ -326,7 +306,7 @@ class _OnboardingStepView extends StatelessWidget {
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final compact = constraints.maxWidth < 350;
-                      final height = compact ? 286.0 : 310.0;
+                      final height = compact ? 270.0 : 292.0;
                       final chipWidth = (constraints.maxWidth * .46)
                           .clamp(132.0, 176.0)
                           .toDouble();
@@ -338,20 +318,12 @@ class _OnboardingStepView extends StatelessWidget {
                             Positioned.fill(
                               child: Container(
                                 decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                    colors: [
-                                      step.color.withValues(alpha: 0.06),
-                                      step.color.withValues(alpha: 0.12),
-                                    ],
-                                  ),
+                                  color: step.color.withValues(alpha: 0.08),
                                   border: Border.all(
                                     color: step.color.withValues(alpha: 0.22),
                                   ),
                                   borderRadius:
                                       BorderRadius.circular(DawaRadii.feature),
-                                  boxShadow: DawaShadows.card,
                                 ),
                                 clipBehavior: Clip.antiAlias,
                                 child: Stack(
@@ -476,18 +448,12 @@ class _OnboardingMiniCard extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 8),
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.94),
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(16),
-            topRight: Radius.circular(10),
-            bottomRight: Radius.circular(16),
-            bottomLeft: Radius.circular(10),
-          ),
+          borderRadius: BorderRadius.circular(DawaRadii.small),
           border: Border.all(color: color.withValues(alpha: 0.25)),
-          boxShadow: DawaShadows.card,
         ),
         child: Row(
           children: [
-            DawaIconBadge(icon: icon, color: color, size: 34),
+            Icon(icon, color: color, size: 21),
             const SizedBox(width: 8),
             Expanded(
               child: Text(

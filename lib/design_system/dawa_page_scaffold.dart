@@ -2,6 +2,30 @@ import 'package:flutter/material.dart';
 
 import 'dawa_design_tokens.dart';
 
+/// Supplies the space occupied by the floating mobile shell controls.
+///
+/// Pages consume this inset only while hosted by the mobile shell, so the
+/// body can extend behind the navigation without hiding the final content.
+class DawaMobileNavigationInset extends InheritedWidget {
+  const DawaMobileNavigationInset({
+    super.key,
+    required this.bottom,
+    required super.child,
+  });
+
+  final double bottom;
+
+  static double maybeOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<DawaMobileNavigationInset>()
+          ?.bottom ??
+      0;
+
+  @override
+  bool updateShouldNotify(DawaMobileNavigationInset oldWidget) =>
+      bottom != oldWidget.bottom;
+}
+
 class DawaPageScaffold extends StatelessWidget {
   const DawaPageScaffold({
     super.key,
@@ -31,13 +55,19 @@ class DawaPageScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final safeBottom = MediaQuery.viewPaddingOf(context).bottom;
-    final mobileNavigationSpace =
-        DawaBreakpoints.isMobile(context) && reserveMobileNavigationSpace
-            ? DawaLayout.mobileNavigationHeight +
-                DawaLayout.mobileNavigationWaveClearance
-            : 0.0;
+    final shellNavigationSpace = DawaMobileNavigationInset.maybeOf(context);
+    final mobileNavigationSpace = DawaBreakpoints.isMobile(context)
+        ? shellNavigationSpace > 0
+            ? shellNavigationSpace
+            : reserveMobileNavigationSpace
+                ? DawaLayout.mobileNavigationHeight +
+                    DawaLayout.mobileNavigationWaveClearance
+                : 0.0
+        : 0.0;
+    final contentNavigationSpace =
+        bottomNavigationBar == null ? mobileNavigationSpace : 0.0;
     final bottomPadding =
-        mobileNavigationSpace + safeBottom + DawaLayout.bottomContentGap;
+        contentNavigationSpace + safeBottom + DawaLayout.bottomContentGap;
     final effectivePadding = padding ??
         EdgeInsets.fromLTRB(
           DawaBreakpoints.pagePadding(context),
@@ -91,7 +121,12 @@ class DawaPageScaffold extends StatelessWidget {
       backgroundColor: DawaColors.canvas,
       resizeToAvoidBottomInset: true,
       floatingActionButton: floatingActionButton,
-      bottomNavigationBar: bottomNavigationBar,
+      bottomNavigationBar: bottomNavigationBar == null
+          ? null
+          : Padding(
+              padding: EdgeInsets.only(bottom: mobileNavigationSpace),
+              child: bottomNavigationBar,
+            ),
       body: Stack(
         fit: StackFit.expand,
         children: [

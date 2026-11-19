@@ -15,7 +15,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # In iOS, build-name is used as CFBundleShortVersionString while build-number used as CFBundleVersion.
 # Read more about iOS versioning at
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
-version: 1.0.0+2
+version: 1.0.0+6
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -34,6 +34,7 @@ dependencies:
   collection: 1.19.1
   dropdown_button2: 2.3.9
   flutter_animate: 4.5.0
+  lottie: ^3.1.2
   flutter_cache_manager: 3.4.1
   font_awesome_flutter: 11.0.0
   from_css_color: 2.0.0
@@ -92,6 +93,7 @@ dependencies:
   http: ^1.4.0
   flutter_tts: ^4.2.5
   record: ^6.2.1
+  qr_flutter: ^4.1.0
 
 dependency_overrides:
   http: 1.4.0
@@ -145,9 +147,14 @@ flutter:
     - "assets/images/transparent assets/"
     - assets/videos/
     - assets/audios/
+    - assets/audios/sounds/
+    - assets/audios/lessons/
+    - assets/audios/sounds/
     - assets/rive_animations/
     - assets/pdfs/
     - assets/jsons/
+    - assets/lotties/
+    - assets/pregnancy_development_stages/
     - assets/Video_Not_a_GIF.mp4
     - assets/dawa_intro.gif
     - dawa_mom_screens/assets/illustrations/

@@ -30,7 +30,7 @@ class DawaAuthScaffold extends StatelessWidget {
               left: 0,
               right: 0,
               bottom: 0,
-              height: 155,
+              height: 112,
               child: IgnorePointer(
                 child: CustomPaint(painter: DawaWavePainter()),
               ),
@@ -38,9 +38,9 @@ class DawaAuthScaffold extends StatelessWidget {
             if (showMotherLine)
               Positioned(
                 right: DawaBreakpoints.isMobile(context) ? -34 : 24,
-                bottom: 50,
+                bottom: 28,
                 width: DawaBreakpoints.isMobile(context) ? 165 : 210,
-                height: 235,
+                height: 190,
                 child: Opacity(
                   opacity: 0.45,
                   child: Image.asset(
@@ -57,9 +57,9 @@ class DawaAuthScaffold extends StatelessWidget {
                       ScrollViewKeyboardDismissBehavior.onDrag,
                   padding: EdgeInsets.fromLTRB(
                     DawaBreakpoints.pagePadding(context),
-                    26,
+                    18,
                     DawaBreakpoints.pagePadding(context),
-                    120,
+                    82,
                   ),
                   child: ConstrainedBox(
                     constraints: BoxConstraints(maxWidth: maxWidth),
@@ -116,29 +116,24 @@ class DawaWelcomePage extends StatelessWidget {
                         padding: const EdgeInsets.symmetric(horizontal: 18),
                         child: Column(
                           children: [
-                            SizedBox(height: height * (compact ? 0.045 : 0.07)),
+                            SizedBox(
+                                height: height * (compact ? 0.035 : 0.055)),
                             DawaMomLogo(
                               variant: DawaMomLogoVariant.iconOnly,
-                              size: compact ? 72 : 86,
-                              width: compact ? 72 : 86,
+                              size: compact ? 64 : 76,
+                              width: compact ? 64 : 76,
                               semanticLabel: 'DawaMom',
                             ),
-                            SizedBox(height: compact ? 12 : 18),
+                            SizedBox(height: compact ? 10 : 14),
                             FittedBox(
                               fit: BoxFit.scaleDown,
                               child: Text(
                                 'DawaMom',
                                 style: context.dawaDisplay.copyWith(
-                                  fontSize: compact ? 37 : 43,
+                                  fontSize: compact ? 34 : 39,
                                   letterSpacing: -1.4,
                                 ),
                               ),
-                            ),
-                            const SizedBox(height: 5),
-                            const Icon(
-                              Icons.favorite_rounded,
-                              color: DawaColors.green,
-                              size: 18,
                             ),
                             const SizedBox(height: 8),
                             Text(
@@ -165,7 +160,7 @@ class DawaWelcomePage extends StatelessWidget {
                                   borderRadius:
                                       BorderRadius.circular(DawaRadii.pill),
                                   child: Container(
-                                    height: 62,
+                                    height: 56,
                                     padding: const EdgeInsets.only(
                                       left: 25,
                                       right: 7,
@@ -175,8 +170,8 @@ class DawaWelcomePage extends StatelessWidget {
                                         color: Colors.white,
                                         width: 2,
                                       ),
-                                      borderRadius:
-                                          BorderRadius.circular(DawaRadii.pill),
+                                      borderRadius: BorderRadius.circular(
+                                          DawaRadii.medium),
                                     ),
                                     child: Row(
                                       children: [
@@ -191,8 +186,8 @@ class DawaWelcomePage extends StatelessWidget {
                                         ),
                                         const Spacer(),
                                         Container(
-                                          width: 49,
-                                          height: 49,
+                                          width: 44,
+                                          height: 44,
                                           decoration: const BoxDecoration(
                                             color: DawaColors.primary,
                                             shape: BoxShape.circle,
@@ -421,7 +416,7 @@ class _DawaLoginPageState extends State<DawaLoginPage> {
                   child: const Text('Forgot password?'),
                 ),
               ),
-              const SizedBox(height: 82),
+              const SizedBox(height: 36),
               DawaPrimaryButton(
                 label: 'Log in',
                 busy: _busy,
@@ -430,14 +425,13 @@ class _DawaLoginPageState extends State<DawaLoginPage> {
               const SizedBox(height: 12),
               TextButton(
                 onPressed: () => context.go('/register'),
-                style: TextButton.styleFrom(foregroundColor: DawaColors.primary),
+                style:
+                    TextButton.styleFrom(foregroundColor: DawaColors.primary),
                 child: const Text('New to DawaMom?  Create account'),
               ),
               const SizedBox(height: 7),
-              const Text(
-                '🔒  Your privacy matters. Your data is secured.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white, fontSize: 10),
+              const _AuthPrivacyNote(
+                message: 'Your privacy matters. Your data is secured.',
               ),
             ],
           ),
@@ -650,6 +644,14 @@ class _DawaRegistrationPageState extends State<DawaRegistrationPage> {
                     ? context.tr('Use at least 8 characters.')
                     : null,
               ),
+              const SizedBox(height: 4),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Password: 8 or more characters.',
+                  style: context.dawaCaption,
+                ),
+              ),
               const SizedBox(height: 11),
               TextFormField(
                 controller: _confirm,
@@ -666,23 +668,13 @@ class _DawaRegistrationPageState extends State<DawaRegistrationPage> {
                     : null,
               ),
               const SizedBox(height: 11),
-              DawaCard(
-                padding: const EdgeInsets.all(10),
-                color: DawaColors.softBlue,
-                child: Row(
-                  children: [
-                    const Icon(Icons.sync_alt_rounded,
-                        color: DawaColors.primary, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _phoneMode
-                            ? 'You can add an email later in your profile.'
-                            : 'You can add a phone number later in your profile.',
-                        style: context.dawaCaption,
-                      ),
-                    ),
-                  ],
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _phoneMode
+                      ? 'You can add an email later in your profile.'
+                      : 'You can add a phone number later in your profile.',
+                  style: context.dawaCaption,
                 ),
               ),
               const SizedBox(height: 14),
@@ -697,11 +689,10 @@ class _DawaRegistrationPageState extends State<DawaRegistrationPage> {
                 textAlign: TextAlign.center,
                 style: context.dawaCaption.copyWith(fontSize: 9),
               ),
-              const SizedBox(height: 54),
-              TextButton(
+              const SizedBox(height: 20),
+              _AuthFooterAction(
+                label: 'Already registered?  Log in',
                 onPressed: () => context.go('/login'),
-                style: TextButton.styleFrom(foregroundColor: DawaColors.primary),
-                child: const Text('Already registered?  Log in'),
               ),
             ],
           ),
@@ -733,7 +724,9 @@ class _ModeButton extends StatelessWidget {
             constraints: const BoxConstraints(minHeight: 46),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(DawaRadii.pill),
-              border: selected ? Border.all(color: DawaColors.green) : null,
+              border: selected
+                  ? Border.all(color: DawaColors.primary, width: 1.5)
+                  : null,
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -742,12 +735,17 @@ class _ModeButton extends StatelessWidget {
                     size: 19,
                     color: selected ? DawaColors.green : DawaColors.muted),
                 const SizedBox(width: 7),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: selected ? DawaColors.primary : DawaColors.muted,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                    fontSize: 12,
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 2,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: selected ? DawaColors.primary : DawaColors.muted,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                      fontSize: 12,
+                      height: 1.15,
+                    ),
                   ),
                 ),
               ],
@@ -936,11 +934,68 @@ class _DawaPasswordRecoveryPageState extends State<DawaPasswordRecoveryPage> {
                   _phoneMode ? 'Use email instead' : 'Use phone instead',
                 ),
               ),
-              const SizedBox(height: 125),
-              TextButton(
+              const SizedBox(height: 40),
+              _AuthFooterAction(
+                label: 'Remembered your password?  Log in',
                 onPressed: () => context.go('/login'),
-                style: TextButton.styleFrom(foregroundColor: Colors.white),
-                child: const Text('Remembered your password?  Log in'),
+              ),
+            ],
+          ),
+        ),
+      );
+}
+
+class _AuthFooterAction extends StatelessWidget {
+  const _AuthFooterAction({required this.label, required this.onPressed});
+
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: DawaColors.warmSurface.withValues(alpha: .94),
+        borderRadius: BorderRadius.circular(DawaRadii.pill),
+        child: TextButton(
+          onPressed: onPressed,
+          style: TextButton.styleFrom(
+            foregroundColor: DawaColors.primary,
+            minimumSize: const Size(48, 44),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            shape: const StadiumBorder(),
+          ),
+          child: Text(label, textAlign: TextAlign.center),
+        ),
+      );
+}
+
+class _AuthPrivacyNote extends StatelessWidget {
+  const _AuthPrivacyNote({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: BoxDecoration(
+          color: DawaColors.warmSurface.withValues(alpha: .94),
+          borderRadius: BorderRadius.circular(DawaRadii.pill),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.lock_outline_rounded,
+                size: 14,
+                color: DawaColors.greenDark,
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: context.dawaCaption.copyWith(fontSize: 10),
+                ),
               ),
             ],
           ),

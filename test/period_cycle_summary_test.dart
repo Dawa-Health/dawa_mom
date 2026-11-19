@@ -32,6 +32,27 @@ void main() {
     expect(summary.cycleDay, 3);
   });
 
+  test('closes an explicitly ended period on the day it is saved', () {
+    final now = DateTime(2026, 10, 9);
+    final summary = PeriodCycleSummary.derive(
+      now: now,
+      settings: {
+        'averageCycleLength': 28,
+        'periodLength': 5,
+        'isRegular': true,
+        'lastPeriodStart': now.subtract(const Duration(days: 2)),
+      },
+      history: [
+        PeriodRecord(
+          startDate: now.subtract(const Duration(days: 2)),
+          endDate: now,
+        ),
+      ],
+    );
+
+    expect(summary.isPeriodActive, isFalse);
+  });
+
   test('marks an early estimate as insufficient history', () {
     final summary = PeriodCycleSummary.derive(
       now: now,

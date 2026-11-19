@@ -459,9 +459,10 @@ class _NavBarPageState extends State<NavBarPage> {
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Cancel'),
           ),
-          TextButton(
+          FilledButton.icon(
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Logout'),
+            icon: const Icon(Icons.logout_rounded),
+            label: const Text('Logout'),
           ),
         ],
       ),

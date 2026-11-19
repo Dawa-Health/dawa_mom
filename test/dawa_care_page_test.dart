@@ -1,14 +1,98 @@
 import 'dart:async';
 
+import 'package:dawa_mom/components/responsive/dawa_mom_responsive_shell.dart';
+import 'package:dawa_mom/config/dawa_release_features.dart';
 import 'package:dawa_mom/design_system/dawa_design_tokens.dart';
 import 'package:dawa_mom/features/appointments/data/appointment_repository.dart';
 import 'package:dawa_mom/features/appointments/domain/appointment.dart';
 import 'package:dawa_mom/features/appointments/presentation/dawa_care_page.dart';
+import 'package:dawa_mom/features/care_plan/data/dawa_care_plan_repository.dart';
+import 'package:dawa_mom/features/care_plan/domain/dawa_care_item.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+const _mobileDestinations = <DawaMomShellDestination>[
+  DawaMomShellDestination(
+    label: 'Home',
+    icon: Icons.home_outlined,
+    selectedIcon: Icons.home,
+  ),
+  DawaMomShellDestination(
+    label: 'Track',
+    icon: Icons.sync_outlined,
+    selectedIcon: Icons.sync,
+  ),
+  DawaMomShellDestination(
+    label: 'Care',
+    icon: Icons.health_and_safety_outlined,
+    selectedIcon: Icons.health_and_safety,
+  ),
+  DawaMomShellDestination(
+    label: 'Learn',
+    icon: Icons.menu_book_outlined,
+    selectedIcon: Icons.menu_book,
+  ),
+  DawaMomShellDestination(
+    label: 'Profile',
+    icon: Icons.person_outline,
+    selectedIcon: Icons.person,
+  ),
+];
+
 void main() {
+  test('Release 1 disables Care Plan before any Supabase client is resolved',
+      () async {
+    expect(DawaReleaseFeatures.carePlanEnabled, isFalse);
+
+    var requestCount = 0;
+    final httpClient = MockClient((_) async {
+      requestCount += 1;
+      return http.Response('unexpected request', 500);
+    });
+    final repository = DawaCarePlanRepository(
+      client: SupabaseClient(
+        'https://care-plan-test.invalid',
+        'test-anon-key',
+        httpClient: httpClient,
+      ),
+      enabled: false,
+    );
+
+    final snapshot = await repository.load();
+
+    expect(snapshot.items, isEmpty);
+    expect(snapshot.isCached, isFalse);
+    expect(snapshot.availability, DawaCarePlanAvailability.disabled);
+    expect(requestCount, 0);
+    httpClient.close();
+  });
+
+  test('care repository identifies an undeployed care-plan table', () {
+    expect(
+      DawaCarePlanRepository.isMissingSchemaError(
+        const PostgrestException(
+          message:
+              "Could not find the table 'public.care_plan_items' in the schema cache",
+          code: 'PGRST205',
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      DawaCarePlanRepository.isMissingSchemaError(
+        const PostgrestException(
+          message: 'JWT expired',
+          code: 'PGRST301',
+        ),
+      ),
+      isFalse,
+    );
+  });
+
   testWidgets('Care defaults to Upcoming and renders real appointment data',
       (tester) async {
     tester.view.devicePixelRatio = 1;
@@ -16,11 +100,13 @@ void main() {
     final appointment = _appointment();
 
     for (final size in const [
+      Size(320, 568),
+      Size(360, 800),
       Size(390, 844),
+      Size(400, 793),
+      Size(412, 915),
+      Size(430, 932),
       Size(768, 1024),
-      Size(1024, 768),
-      Size(1366, 900),
-      Size(1440, 900),
     ]) {
       tester.view.physicalSize = size;
       await _pumpCare(
@@ -42,13 +128,55 @@ void main() {
       expect(find.text('Dr Jane Banda'), findsOneWidget);
       expect(find.text('Kabulonga Clinic'), findsOneWidget);
       expect(find.text('Quick actions'), findsNothing);
-      expect(find.text('3 of 5'), findsOneWidget);
+      expect(find.text('Visit preparation: 3 of 5'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('care-tab-upcoming')),
         findsOneWidget,
       );
       await tester.pumpWidget(const SizedBox());
     }
+  });
+
+  testWidgets('Upcoming visit keeps pending and confirmed states distinct',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(393, 852);
+    addTearDown(tester.view.reset);
+
+    await _pumpCare(
+      tester,
+      DawaCarePage(
+        initialAppointments: [
+          _appointment(status: 'pending'),
+        ],
+        initialClinics: const [],
+      ),
+    );
+
+    expect(find.text('Pending'), findsOneWidget);
+    expect(find.text('Confirmed'), findsNothing);
+    expect(find.text('View visit'), findsOneWidget);
+    expect(
+      find.bySemanticsLabel(
+        DateFormat('EEEE, d MMMM y').format(
+          DateTime.now().add(const Duration(days: 7)),
+        ),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    await _pumpCare(
+      tester,
+      DawaCarePage(
+        initialAppointments: [_appointment(status: 'confirmed')],
+        initialClinics: const [],
+      ),
+    );
+    expect(find.text('Confirmed'), findsOneWidget);
+    expect(find.text('Pending'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('Care sections preserve the selected tab and show real content',
@@ -117,13 +245,287 @@ void main() {
       ),
     );
 
-    expect(find.text('No upcoming appointments'), findsOneWidget);
-    expect(find.text('Book appointment'), findsOneWidget);
-    expect(find.text('Browse clinics'), findsOneWidget);
+    expect(find.text('No visits yet'), findsOneWidget);
+    expect(find.text('Book a visit'), findsOneWidget);
+    expect(find.text('Find clinics'), findsOneWidget);
     expect(find.text('Quick actions'), findsNothing);
-    await tester.tap(find.text('Browse clinics'));
+    await tester.tap(find.text('Find clinics'));
     await tester.pumpAndSettle();
     expect(find.text('Find care near you'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Care maps a real server care item as the recommended next step',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.reset);
+    final dueAt = DateTime.now().add(const Duration(days: 2));
+
+    await _pumpCare(
+      tester,
+      DawaCarePage(
+        initialAppointments: const [],
+        initialClinics: const [],
+        initialCareItems: [
+          DawaCareItem(
+            id: 'care-1',
+            motherId: 'mother-1',
+            patientId: 'patient-1',
+            type: 'screening_followup',
+            title: 'Screening follow-up',
+            status: DawaCareItemStatus.due,
+            priority: DawaCareItemPriority.high,
+            dueAt: dueAt,
+            source: 'clinician',
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        ],
+      ),
+    );
+
+    expect(find.text('RECOMMENDED NEXT STEP'), findsOneWidget);
+    expect(find.text('Screening follow-up'), findsOneWidget);
+    expect(find.text('Due now'), findsOneWidget);
+    expect(find.text('No visits yet'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Care history includes completed non-appointment care items',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.reset);
+    final completedAt = DateTime.now().subtract(const Duration(days: 1));
+
+    await _pumpCare(
+      tester,
+      DawaCarePage(
+        initialAppointments: const [],
+        initialClinics: const [],
+        initialCareItems: [
+          DawaCareItem(
+            id: 'care-completed',
+            motherId: 'mother-1',
+            patientId: 'patient-1',
+            type: 'learning',
+            title: 'Nutrition lesson',
+            status: DawaCareItemStatus.completed,
+            priority: DawaCareItemPriority.routine,
+            completedAt: completedAt,
+            source: 'learning',
+            createdAt: completedAt,
+            updatedAt: completedAt,
+          ),
+        ],
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('care-tab-history')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Other completed care'), findsOneWidget);
+    expect(find.text('Nutrition lesson'), findsOneWidget);
+    expect(find.text('Completed'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('missing care schema falls back without a patient warning',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.reset);
+
+    await _pumpCare(
+      tester,
+      DawaCarePage(
+        initialAppointments: const [],
+        initialClinics: const [],
+        carePlanRepository: _CarePlanRepository(
+          const DawaCarePlanSnapshot(
+            items: [],
+            isCached: false,
+            availability: DawaCarePlanAvailability.schemaUnavailable,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.textContaining("couldn't refresh"), findsNothing);
+    expect(find.textContaining('unavailable'), findsNothing);
+    expect(find.text('No visits yet'), findsOneWidget);
+  });
+
+  testWidgets('cached care remains visible when live refresh is unavailable',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.reset);
+    final now = DateTime.now();
+
+    await _pumpCare(
+      tester,
+      DawaCarePage(
+        initialAppointments: const [],
+        initialClinics: const [],
+        carePlanRepository: _CarePlanRepository(
+          DawaCarePlanSnapshot(
+            items: [
+              DawaCareItem(
+                id: 'cached-care',
+                motherId: 'mother-1',
+                patientId: 'patient-1',
+                type: 'clinical_followup',
+                title: 'Saved follow-up',
+                status: DawaCareItemStatus.due,
+                priority: DawaCareItemPriority.high,
+                source: 'clinician',
+                createdAt: now,
+                updatedAt: now,
+              ),
+            ],
+            isCached: true,
+            cachedAt: now,
+            availability: DawaCarePlanAvailability.cached,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Saved follow-up'), findsOneWidget);
+    expect(
+        find.textContaining('Showing saved care information'), findsOneWidget);
+    expect(find.textContaining("couldn't refresh"), findsNothing);
+  });
+
+  testWidgets('temporary care failure uses a compact section retry state',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.reset);
+
+    final repository = _PendingCarePlanRepository();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: DawaTheme.light(),
+        home: DawaCarePage(
+          initialAppointments: const [],
+          initialClinics: const [],
+          carePlanRepository: repository,
+        ),
+      ),
+    );
+    await tester.pump();
+    repository.fail();
+    await tester.pumpAndSettle();
+
+    expect(find.text("Care recommendations couldn't refresh"), findsOneWidget);
+    expect(find.text('Your appointments are still available.'), findsOneWidget);
+    expect(find.text('Retry'), findsOneWidget);
+    expect(find.text('Recommended care unavailable'), findsNothing);
+  });
+
+  testWidgets('clinic card hides missing metadata and stays compact',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 568);
+    addTearDown(tester.view.reset);
+
+    await _pumpCare(
+      tester,
+      const DawaCarePage(
+        initialAppointments: [],
+        initialClinics: [
+          ClinicOption(id: 'clinic-minimal', name: 'Kabulonga Clinic'),
+        ],
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('care-tab-clinics')));
+    await tester.pumpAndSettle();
+
+    final card = find.byKey(const ValueKey('clinic-card-clinic-minimal'));
+    expect(card, findsOneWidget);
+    expect(tester.getSize(card).height, lessThan(190));
+    expect(find.textContaining('Unknown'), findsNothing);
+    expect(find.textContaining('N/A'), findsNothing);
+    expect(find.textContaining('No services'), findsNothing);
+    expect(find.text('View clinic'), findsOneWidget);
+    expect(find.text('Book'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('clinic actions clear floating navigation at 320px',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 568);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: DawaTheme.light(),
+        home: DawaMomResponsiveShell(
+          currentIndex: 2,
+          destinations: _mobileDestinations,
+          onDestinationSelected: (_) {},
+          onLogout: () async {},
+          child: const DawaCarePage(
+            initialAppointments: [],
+            initialClinics: [
+              ClinicOption(
+                id: 'clinic-actions',
+                name: 'Kabulonga Clinic',
+                address: 'Lusaka',
+                services: ['Antenatal care'],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('care-tab-clinics')));
+    await tester.pumpAndSettle();
+
+    final book = find.text('Book');
+    await tester.ensureVisible(book);
+    await tester.pumpAndSettle();
+
+    final bookRect = tester.getRect(book);
+    final navRect = tester.getRect(find.byType(BottomNavigationBar));
+    final rudoRect =
+        tester.getRect(find.byKey(const ValueKey('rudo-launcher')));
+    expect(bookRect.bottom, lessThan(navRect.top));
+    expect(bookRect.overlaps(rudoRect), isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('history keeps one clear status and a compact primary action',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 568);
+    addTearDown(tester.view.reset);
+
+    await _pumpCare(
+      tester,
+      DawaCarePage(
+        initialAppointments: [
+          _appointment(
+            id: 'cancelled-history',
+            status: 'cancelled',
+            date: DateTime.now().subtract(const Duration(days: 3)),
+          ),
+        ],
+        initialClinics: const [],
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('care-tab-history')));
+    await tester.pumpAndSettle();
+
+    final card = find.byKey(const ValueKey('care-history-cancelled-history'));
+    expect(card, findsOneWidget);
+    expect(find.text('Cancelled'), findsOneWidget);
+    expect(find.text('View details'), findsOneWidget);
+    expect(tester.getSize(card).height, lessThan(180));
     expect(tester.takeException(), isNull);
   });
 
@@ -152,7 +554,7 @@ void main() {
 
     repository.completeCancellation();
     await tester.pumpAndSettle();
-    expect(find.text('No upcoming appointments'), findsOneWidget);
+    expect(find.text('No visits yet'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }
@@ -215,4 +617,22 @@ class _ControlledAppointmentRepository extends AppointmentRepository {
       ),
     );
   }
+}
+
+class _CarePlanRepository extends DawaCarePlanRepository {
+  _CarePlanRepository(this.snapshot);
+
+  final DawaCarePlanSnapshot snapshot;
+
+  @override
+  Future<DawaCarePlanSnapshot> load() async => snapshot;
+}
+
+class _PendingCarePlanRepository extends DawaCarePlanRepository {
+  final _result = Completer<DawaCarePlanSnapshot>();
+
+  @override
+  Future<DawaCarePlanSnapshot> load() => _result.future;
+
+  void fail() => _result.completeError(Exception('offline'));
 }

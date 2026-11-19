@@ -1,4 +1,4 @@
-import 'package:dawa_mom/features/period_tracker/presentation/dawa_cycle_tracker_page.dart';
+import 'package:dawa_mom/features/period_tracker/presentation/dawa_daily_check_in_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -56,5 +56,43 @@ void main() {
     expect(capturedPain, 1);
     expect(capturedFeeling, 'Great');
     expect(capturedNote, 'Felt better after resting.');
+  });
+
+  testWidgets('overall feeling is immediately reachable on a small phone',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 568);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showDawaDailyCheckInSheet(
+                context,
+                date: DateTime(2026, 10, 1),
+                existing: null,
+                onSave: ({
+                  required symptoms,
+                  required pain,
+                  required feeling,
+                  required note,
+                }) async {},
+              ),
+              child: const Text('Open check-in'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open check-in'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Overall feeling'), findsOneWidget);
+    expect(find.text('Great').hitTestable(), findsOneWidget);
+    expect(find.text('Save log'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

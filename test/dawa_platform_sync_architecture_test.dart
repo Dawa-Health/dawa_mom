@@ -42,6 +42,9 @@ void main() {
 
     expect(source, contains('DAWA_CLINICIAN_PATIENT_SYNC_URL'));
     expect(source, contains('DAWA_CLINICIAN_APPOINTMENT_URL'));
+    expect(source, contains('DAWA_CLINICIAN_RISK_ALERT_URL'));
+    expect(source, contains("job.event_type === 'risk_alert.archived'"));
+    expect(source, contains('RISK_ALERT_ENDPOINT_NOT_CONFIGURED'));
     expect(source, contains('x-dawa-sync-secret'));
     expect(source, contains('PATIENT_NOT_SYNCED'));
     expect(source, contains('DIRECTORY_MAPPING_MISSING'));

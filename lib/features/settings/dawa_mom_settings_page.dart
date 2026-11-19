@@ -3,12 +3,14 @@ import '/localization/dawa_localized_material.dart';
 import '/auth/login/login_widget.dart';
 import '/auth/supabase_auth/auth_util.dart';
 import '/components/period_setup/period_setup_flow.dart';
+import '/config/dawa_release_features.dart';
 import '/design_system/dawa_components.dart';
 import '/design_system/dawa_design_tokens.dart';
 import '/design_system/dawa_page_scaffold.dart';
 import '/components/responsive/dawa_mom_responsive_shell.dart';
 import '/features/learning/data/dawa_learning_repository.dart';
 import '/features/onboarding/dawa_main_app_tour.dart';
+import '/features/preferences/dawa_app_preferences_page.dart';
 import '/features/preferences/dawa_language_sheet.dart';
 import '/features/preferences/dawa_user_preferences_repository.dart';
 import '/features/profile/data/health_profile_repository.dart';
@@ -52,7 +54,9 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
 
   Future<void> _refresh() async {
     final future = _profiles.load();
-    setState(() => _profile = future);
+    setState(() {
+      _profile = future;
+    });
     await future;
   }
 
@@ -73,7 +77,11 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
     );
     if (result == null) return;
     final saved = await _preferencesRepository.save(result);
-    if (mounted) setState(() => _preferences = Future.value(saved));
+    if (mounted) {
+      setState(() {
+        _preferences = Future.value(saved);
+      });
+    }
   }
 
   Future<void> _showRewards(DawaLearningState value) async {
@@ -220,6 +228,7 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
     final result = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        scrollable: true,
         title: const Text('Change password'),
         content: SizedBox(
           width: 440,
@@ -227,13 +236,19 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
             key: formKey,
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text(
+                  'Use at least 8 characters and avoid a password you use elsewhere.',
+                  style: context.dawaCaption,
+                ),
+                const SizedBox(height: DawaSpacing.md),
                 TextFormField(
                   controller: controller,
                   obscureText: true,
                   decoration: InputDecoration(
                     labelText: 'New password',
-                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.lock_outline_rounded),
                   ),
                   validator: (value) => (value?.length ?? 0) < 8
                       ? context.tr('Use at least 8 characters.')
@@ -245,7 +260,7 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
                   obscureText: true,
                   decoration: InputDecoration(
                     labelText: 'Confirm new password',
-                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.lock_reset_rounded),
                   ),
                   validator: (value) => value != controller.text
                       ? context.tr('Passwords do not match.')
@@ -256,16 +271,18 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
           ),
         ),
         actions: [
-          TextButton(
+          DawaTextButton(
+            label: 'Cancel',
             onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
           ),
-          FilledButton(
+          DawaPrimaryButton(
+            label: 'Update password',
+            fullWidth: false,
+            icon: Icons.check_rounded,
             onPressed: () {
               if (formKey.currentState?.validate() != true) return;
               Navigator.pop(dialogContext, controller.text);
             },
-            child: const Text('Update password'),
           ),
         ],
       ),
@@ -283,13 +300,15 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
         title: const Text('Logout'),
         content: const Text('Are you sure you want to log out?'),
         actions: [
-          TextButton(
+          DawaTextButton(
+            label: 'Cancel',
             onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
           ),
-          FilledButton(
+          DawaPrimaryButton(
+            label: 'Logout',
+            fullWidth: false,
+            icon: Icons.logout_rounded,
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Logout'),
           ),
         ],
       ),
@@ -351,7 +370,6 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
               children: [
                 DawaAppHeader(
                   title: 'My profile',
-                  notificationUnread: true,
                   onNotifications: () => context.push('/notifications'),
                 ),
                 const SizedBox(height: 8),
@@ -359,8 +377,8 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final image = SizedBox(
-                        width: constraints.maxWidth < 480 ? 116 : 142,
-                        height: constraints.maxWidth < 480 ? 124 : 142,
+                        width: constraints.maxWidth < 480 ? 92 : 118,
+                        height: constraints.maxWidth < 480 ? 108 : 124,
                         child: Image.asset(
                           DawaArtwork.motherGreeting,
                           fit: BoxFit.contain,
@@ -372,7 +390,7 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
                         children: [
                           Text(
                             profile.name.isEmpty
-                                ? 'DawaMom member'
+                                ? 'Your profile'
                                 : profile.name,
                             style: context.dawaTitle.copyWith(fontSize: 21),
                           ),
@@ -417,13 +435,10 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
                                 : DawaColors.primary,
                           ),
                           const SizedBox(height: 10),
-                          OutlinedButton.icon(
+                          DawaCompactButton(
                             onPressed: _editProfile,
-                            icon: const Icon(Icons.edit_outlined, size: 17),
-                            label: const Text('Edit profile'),
-                            style: OutlinedButton.styleFrom(
-                              minimumSize: const Size(44, 42),
-                            ),
+                            icon: Icons.edit_outlined,
+                            label: 'Edit profile',
                           ),
                         ],
                       );
@@ -453,58 +468,57 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
                   actionLabel: 'View all',
                 ),
                 const SizedBox(height: 8),
-                DawaCard(
-                  child: DawaResponsiveGrid(
-                    mobileColumns: 2,
-                    tabletColumns: 4,
-                    desktopColumns: 4,
-                    children: [
-                      _ProfileSummaryFact(
-                        icon: Icons.pregnant_woman_rounded,
-                        color: DawaColors.purple,
-                        label: 'Pregnancy',
-                        value: profile.pregnancyWeek == null
-                            ? 'Not recorded'
-                            : '${profile.pregnancyWeek} weeks',
-                        helper: profile.trimester == null
-                            ? 'Update profile'
-                            : 'Trimester ${profile.trimester}',
-                        onTap: _openCompletionHub,
-                      ),
-                      _ProfileSummaryFact(
-                        icon: Icons.water_drop_rounded,
-                        color: DawaColors.pink,
-                        label: 'Cycle tracking',
-                        value: profile.periodComplete ? 'Active' : 'Not set up',
-                        helper: profile.periodComplete
-                            ? 'Cycle details saved'
-                            : 'Add last period',
-                        onTap: () => _setupPeriod(profile),
-                      ),
-                      _ProfileSummaryFact(
-                        icon: Icons.fact_check_outlined,
-                        color: DawaColors.green,
-                        label: 'Profile',
-                        value: '${profile.completedSections}/4 sections',
-                        helper: profile.isComplete
-                            ? 'Up to date'
-                            : 'Needs attention',
-                        onTap: _openCompletionHub,
-                      ),
-                      _ProfileSummaryFact(
-                        icon: Icons.local_hospital_outlined,
-                        color: DawaColors.primary,
-                        label: 'Care link',
-                        value: profile.isMappedToDawaClinician
-                            ? 'Connected'
-                            : 'Pending',
-                        helper: profile.patientSyncNeedsAttention
-                            ? 'Review required'
-                            : 'Dawa care',
-                        onTap: _openCompletionHub,
-                      ),
-                    ],
-                  ),
+                DawaResponsiveGrid(
+                  mobileColumns: 2,
+                  tabletColumns: 4,
+                  desktopColumns: 4,
+                  spacing: DawaSpacing.xs,
+                  runSpacing: DawaSpacing.xs,
+                  children: [
+                    DawaMetricTile(
+                      icon: Icons.pregnant_woman_rounded,
+                      color: DawaColors.purple,
+                      label: 'Pregnancy',
+                      value: profile.pregnancyWeek == null
+                          ? 'Not recorded'
+                          : '${profile.pregnancyWeek} weeks',
+                      helper: profile.trimester == null
+                          ? 'Update profile'
+                          : 'Trimester ${profile.trimester}',
+                      onTap: _openCompletionHub,
+                    ),
+                    DawaMetricTile(
+                      icon: Icons.water_drop_rounded,
+                      color: DawaColors.pink,
+                      label: 'Cycle tracking',
+                      value: profile.periodComplete ? 'Active' : 'Not set up',
+                      helper: profile.periodComplete
+                          ? 'Cycle details saved'
+                          : 'Add last period',
+                      onTap: () => _setupPeriod(profile),
+                    ),
+                    DawaMetricTile(
+                      icon: Icons.fact_check_outlined,
+                      color: DawaColors.green,
+                      label: 'Profile',
+                      value: '${profile.completedSections}/4 sections',
+                      helper:
+                          profile.isComplete ? 'Up to date' : 'Needs attention',
+                      onTap: _openCompletionHub,
+                    ),
+                    DawaMetricTile(
+                      icon: Icons.local_hospital_outlined,
+                      color: DawaColors.primary,
+                      label: 'Care link',
+                      value: profile.isMappedToDawaClinician
+                          ? 'Connected'
+                          : 'Pending',
+                      helper: profile.patientSyncNeedsAttention
+                          ? 'Review required'
+                          : 'Dawa care',
+                      onTap: _openCompletionHub,
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 FutureBuilder<DawaLearningState>(
@@ -539,12 +553,26 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
                                   value: state.coins / 1000,
                                   semanticLabel: 'Free scan reward progress',
                                 ),
+                                const SizedBox(height: DawaSpacing.xxs),
+                                Text(
+                                  !DawaReleaseFeatures.voucherRedemptionEnabled
+                                      ? 'Your points are saved while clinic rewards are prepared'
+                                      : state.coins >= 1000
+                                          ? 'Clinic scan voucher available'
+                                          : '${1000 - state.coins} points to a clinic scan voucher',
+                                  style: context.dawaCaption,
+                                ),
                               ],
                             ),
                           ),
                           const SizedBox(width: 10),
-                          const Icon(Icons.redeem_rounded,
-                              color: DawaColors.primary, size: 36),
+                          Icon(
+                            DawaReleaseFeatures.voucherRedemptionEnabled
+                                ? Icons.redeem_rounded
+                                : Icons.workspace_premium_rounded,
+                            color: DawaColors.primary,
+                            size: 36,
+                          ),
                           const Icon(Icons.chevron_right_rounded,
                               color: DawaColors.primary),
                         ],
@@ -582,6 +610,13 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
                             trailing: 'Preferences',
                             onTap: () =>
                                 context.push('/notification-preferences'),
+                          ),
+                          _DawaSettingsRow(
+                            icon: Icons.tune_rounded,
+                            title: 'App preferences',
+                            trailing: 'Sound & feedback',
+                            onTap: () =>
+                                context.push(DawaAppPreferencesPage.routePath),
                           ),
                           _DawaSettingsRow(
                             icon: Icons.lock_outline_rounded,
@@ -642,52 +677,6 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
       },
     );
   }
-}
-
-class _ProfileSummaryFact extends StatelessWidget {
-  const _ProfileSummaryFact({
-    required this.icon,
-    required this.color,
-    required this.label,
-    required this.value,
-    required this.helper,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final Color color;
-  final String label;
-  final String value;
-  final String helper;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-        button: true,
-        label: '$label. $value. $helper.',
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(DawaRadii.small),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-            child: Column(
-              children: [
-                DawaIconBadge(icon: icon, color: color),
-                const SizedBox(height: 6),
-                Text(label,
-                    textAlign: TextAlign.center, style: context.dawaCaption),
-                Text(value,
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: context.dawaSectionTitle),
-                Text(helper,
-                    textAlign: TextAlign.center, style: context.dawaCaption),
-              ],
-            ),
-          ),
-        ),
-      );
 }
 
 class _DawaSettingsRow extends StatelessWidget {
@@ -781,6 +770,7 @@ class _DeleteAccountConfirmationDialogState
 
   @override
   Widget build(BuildContext context) => AlertDialog(
+        scrollable: true,
         title: const Text('Permanently delete account?'),
         content: SizedBox(
           width: 480,
@@ -788,8 +778,30 @@ class _DeleteAccountConfirmationDialogState
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'This permanently deletes your DawaMom account, profile, appointments and tracker data. This action cannot be undone.',
+              Container(
+                padding: const EdgeInsets.all(DawaSpacing.sm),
+                decoration: BoxDecoration(
+                  color: DawaColors.dangerSurface,
+                  borderRadius: BorderRadius.circular(DawaRadii.small),
+                  border: Border.all(
+                    color: DawaColors.danger.withValues(alpha: .28),
+                  ),
+                ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: DawaColors.danger,
+                    ),
+                    SizedBox(width: DawaSpacing.xs),
+                    Expanded(
+                      child: Text(
+                        'This permanently deletes your DawaMom account, profile, appointments and tracker data. This action cannot be undone.',
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 18),
               const Text('Type DELETE to confirm.'),
@@ -799,8 +811,9 @@ class _DeleteAccountConfirmationDialogState
                 controller: _controller,
                 autofocus: true,
                 decoration: InputDecoration(
-                  border: OutlineInputBorder(),
+                  labelText: 'Confirmation',
                   hintText: 'DELETE',
+                  prefixIcon: Icon(Icons.delete_outline_rounded),
                 ),
                 onChanged: (value) => setState(
                   () => _matches = value.trim() == 'DELETE',
@@ -810,15 +823,19 @@ class _DeleteAccountConfirmationDialogState
           ),
         ),
         actions: [
-          TextButton(
+          DawaTextButton(
+            label: 'Keep account',
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Keep account'),
           ),
-          FilledButton(
+          FilledButton.icon(
             key: const ValueKey('confirm-delete-account'),
             onPressed: _matches ? () => Navigator.pop(context, true) : null,
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Delete permanently'),
+            style: FilledButton.styleFrom(
+              backgroundColor: DawaColors.danger,
+              foregroundColor: Colors.white,
+            ),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('Delete permanently'),
           ),
         ],
       );

@@ -103,7 +103,7 @@ void main() {
       for (final title in const [
         'Health answers you can trust',
         'Know your cycle',
-        'Learn, play and earn',
+        'Learn and build healthy habits',
       ]) {
         await tester.tap(find.text('Continue'));
         await tester.pumpAndSettle();

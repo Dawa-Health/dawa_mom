@@ -3,12 +3,16 @@ import 'dart:async';
 import '/localization/dawa_localized_material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
+import '/config/dawa_release_features.dart';
 import '/content/dawa_learning_asset_registry.dart';
 import '/design_system/dawa_components.dart';
 import '/design_system/dawa_contextual_image.dart';
 import '/design_system/dawa_design_tokens.dart';
+import '/design_system/dawa_interactions.dart';
 import '/design_system/dawa_page_scaffold.dart';
+import '/features/feedback/dawa_feedback_effects.dart';
 import '/services/voice_service.dart';
 import '../data/dawa_learning_repository.dart';
 
@@ -55,7 +59,7 @@ class _DawaQuestHubPageState extends State<DawaQuestHubPage> {
               category: 'Your guide and friend',
               title: 'Bana Chenjela is here to guide you',
               subtitle:
-                  'Learn in small steps, build confidence and earn Dawa points for completed healthy actions.',
+                  'Learn in small steps, build confidence and earn Dawa points through eligible completed learning steps.',
               illustrationPath: DawaArtwork.banaWelcome,
               contextualAssetId: 'screening_without_fear_01',
               illustrationAspectRatio: .9,
@@ -125,6 +129,7 @@ class _DawaQuestHubPageState extends State<DawaQuestHubPage> {
               future: _state,
               builder: (context, snapshot) {
                 final state = snapshot.data ?? const DawaLearningState();
+                final progress = dawaQuestProgress(state);
                 return Row(
                   children: [
                     Expanded(
@@ -132,8 +137,8 @@ class _DawaQuestHubPageState extends State<DawaQuestHubPage> {
                         child: Row(
                           children: [
                             const Icon(
-                              Icons.local_fire_department_rounded,
-                              color: Color(0xFFF0843E),
+                              Icons.route_rounded,
+                              color: DawaColors.green,
                               size: 28,
                             ),
                             const SizedBox(width: 8),
@@ -141,9 +146,9 @@ class _DawaQuestHubPageState extends State<DawaQuestHubPage> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text('${state.streak} day streak',
+                                  Text('${(progress * 100).round()}% complete',
                                       style: context.dawaSectionTitle),
-                                  Text('Today’s check-in',
+                                  Text('Mother’s Path',
                                       style: context.dawaCaption),
                                 ],
                               ),
@@ -258,10 +263,12 @@ class _QuestActionCard extends StatelessWidget {
 }
 
 class DawaQuestModulePage extends StatefulWidget {
-  const DawaQuestModulePage({super.key});
+  const DawaQuestModulePage({super.key, this.repository});
 
   static const routeName = 'QuestModule';
   static const routePath = '/learn/quests/screening';
+
+  final DawaLearningRepository? repository;
 
   @override
   State<DawaQuestModulePage> createState() => _DawaQuestModulePageState();
@@ -269,12 +276,16 @@ class DawaQuestModulePage extends StatefulWidget {
 
 class _DawaQuestModulePageState extends State<DawaQuestModulePage> {
   late final VoiceService _voiceService;
+  late final DawaLearningRepository _repository;
+  late Future<DawaLearningState> _state;
   bool _speaking = false;
 
   @override
   void initState() {
     super.initState();
     _voiceService = VoiceService();
+    _repository = widget.repository ?? DawaLearningRepository();
+    _state = _repository.load();
   }
 
   @override
@@ -318,40 +329,66 @@ class _DawaQuestModulePageState extends State<DawaQuestModulePage> {
           children: [
             DawaAppHeader(title: 'Screening Without Fear', onBack: context.pop),
             const SizedBox(height: 10),
-            DawaCard(
-              color: DawaColors.softGreen,
-              borderColor: DawaColors.green.withValues(alpha: .22),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+            FutureBuilder<DawaLearningState>(
+              future: _state,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const DawaLoadingSkeleton(
+                    layout: DawaSkeletonLayout.questRow,
+                    label: 'Loading quest progress',
+                  );
+                }
+                final progress = dawaQuestProgress(
+                  snapshot.data ?? const DawaLearningState(),
+                );
+                final status = progress >= 1
+                    ? 'Quest completed'
+                    : progress > 0
+                        ? 'Checkpoint saved'
+                        : 'Start the guide';
+                return DawaCard(
+                  color: DawaColors.softGreen,
+                  borderColor: DawaColors.green.withValues(alpha: .22),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Text(
-                          'Step 3 of 4',
-                          style: context.dawaSectionTitle,
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'The Mother’s Path',
+                              style: context.dawaSectionTitle,
+                            ),
+                          ),
+                          DawaStatusTransition(
+                            label: status,
+                            icon: progress >= 1
+                                ? Icons.check_circle_rounded
+                                : progress > 0
+                                    ? Icons.bookmark_added_rounded
+                                    : Icons.play_circle_outline_rounded,
+                            color: progress >= 1 || progress > 0
+                                ? DawaColors.greenDark
+                                : DawaColors.primary,
+                          ),
+                        ],
                       ),
-                      const DawaStatusPill(
-                        label: '+20 points',
-                        icon: Icons.toll_rounded,
-                        color: DawaColors.gold,
+                      const SizedBox(height: 10),
+                      DawaProgressBar(
+                        value: progress,
+                        semanticLabel:
+                            'Screening quest ${(progress * 100).round()} percent complete',
+                        color: DawaColors.green,
+                      ),
+                      const SizedBox(height: 7),
+                      Text(
+                        '${(progress * 100).round()}% of saved quest progress',
+                        style: context.dawaCaption,
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
-                  const DawaProgressBar(
-                    value: .6,
-                    semanticLabel: 'Screening quest 60 percent complete',
-                    color: DawaColors.green,
-                  ),
-                  const SizedBox(height: 7),
-                  Text(
-                    '60% complete • Screening Champion badge in progress',
-                    style: context.dawaCaption,
-                  ),
-                ],
-              ),
+                );
+              },
             ),
             const SizedBox(height: 10),
             DawaIllustratedHeroCard(
@@ -373,21 +410,21 @@ class _DawaQuestModulePageState extends State<DawaQuestModulePage> {
               icon: Icons.help_outline_rounded,
               title: 'What is screening?',
               subtitle: 'Learn why screening is important.',
-              state: 'Completed',
+              state: 'Learn',
             ),
             const _QuestStep(
               number: 2,
               icon: Icons.health_and_safety_outlined,
               title: 'Will it hurt?',
               subtitle: 'Find out what to expect.',
-              state: 'Completed',
+              state: 'Learn',
             ),
             _QuestStep(
               number: 3,
               icon: Icons.local_hospital_outlined,
               title: 'What happens at the clinic',
               subtitle: 'Step-by-step through your visit.',
-              state: 'In progress',
+              state: 'Explore',
               onTap: () => context.push('/learn/quests/screening/clinic'),
             ),
             _QuestStep(
@@ -395,7 +432,7 @@ class _DawaQuestModulePageState extends State<DawaQuestModulePage> {
               icon: Icons.calendar_month_outlined,
               title: 'Book my screening',
               subtitle: 'Choose a time that works for you.',
-              state: 'Next',
+              state: 'Optional',
               onTap: () => context.go('/encounters'),
             ),
             const SizedBox(height: 12),
@@ -460,9 +497,9 @@ class DawaClinicLessonPage extends StatelessWidget {
           children: [
             DawaAppHeader(title: 'Screening Without Fear', onBack: context.pop),
             const SizedBox(height: 6),
-            const DawaProgressBar(
-              value: 0.7,
-              semanticLabel: 'Quest progress',
+            const DawaStatusPill(
+              label: 'SCREENING GUIDE',
+              icon: Icons.auto_stories_outlined,
               color: DawaColors.green,
             ),
             const SizedBox(height: 12),
@@ -659,6 +696,9 @@ class _DawaQuestCheckpointPageState extends State<DawaQuestCheckpointPage> {
   late final DawaLearningRepository _repository;
   late Future<DawaLearningState> _state;
   String? _selected;
+  DawaLearningState? _completionBefore;
+  DawaLearningState? _completionAfter;
+  bool _savingCompletion = false;
 
   @override
   void initState() {
@@ -668,15 +708,30 @@ class _DawaQuestCheckpointPageState extends State<DawaQuestCheckpointPage> {
   }
 
   Future<void> _select(String value) async {
+    if (_savingCompletion || _selected == value) return;
     setState(() => _selected = value);
     if (value != 'B') return;
-    final state = await _state;
-    final next = await _repository.complete(
-      state,
-      'screening-checkpoint',
-      rewardCoins: 5,
-    );
-    if (mounted) setState(() => _state = Future.value(next));
+    setState(() => _savingCompletion = true);
+    try {
+      final state = await _state;
+      final next = await _repository.complete(
+        state,
+        'screening-checkpoint',
+        rewardCoins: 5,
+      );
+      if (!mounted) return;
+      final awardConfirmed = next.coins > state.coins;
+      setState(() {
+        _completionBefore = state;
+        _completionAfter = next;
+        _state = Future.value(next);
+      });
+      if (awardConfirmed) {
+        unawaited(DawaFeedbackEffects.learningAwardConfirmed());
+      }
+    } finally {
+      if (mounted) setState(() => _savingCompletion = false);
+    }
   }
 
   @override
@@ -687,29 +742,51 @@ class _DawaQuestCheckpointPageState extends State<DawaQuestCheckpointPage> {
           children: [
             DawaAppHeader(title: 'Quest Checkpoint', onBack: context.pop),
             const SizedBox(height: 10),
-            DawaCard(
-              color: DawaColors.softGreen,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'The Mother’s Path',
-                    style: TextStyle(
-                      color: DawaColors.green,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w600,
-                    ),
+            FutureBuilder<DawaLearningState>(
+              future: _state,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const DawaLoadingSkeleton(
+                    layout: DawaSkeletonLayout.questRow,
+                    label: 'Loading quest progress',
+                  );
+                }
+                final progress = dawaQuestProgress(
+                  snapshot.data ?? const DawaLearningState(),
+                );
+                return DawaCard(
+                  color: DawaColors.softGreen,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'The Mother’s Path',
+                        style: TextStyle(
+                          color: DawaColors.green,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        'Screening Without Fear',
+                        style: context.dawaTitle.copyWith(fontSize: 18),
+                      ),
+                      const SizedBox(height: 8),
+                      DawaProgressBar(
+                        value: progress,
+                        semanticLabel:
+                            'Quest ${(progress * 100).round()} percent complete',
+                        color: DawaColors.green,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${(progress * 100).round()}% of saved quest progress',
+                        style: context.dawaCaption,
+                      ),
+                    ],
                   ),
-                  Text('Screening Without Fear',
-                      style: context.dawaTitle.copyWith(fontSize: 18)),
-                  const SizedBox(height: 8),
-                  const DawaProgressBar(
-                    value: 0.85,
-                    semanticLabel: 'Quest progress',
-                    color: DawaColors.green,
-                  ),
-                ],
-              ),
+                );
+              },
             ),
             const SizedBox(height: 12),
             DawaCard(
@@ -795,16 +872,85 @@ class _DawaQuestCheckpointPageState extends State<DawaQuestCheckpointPage> {
                 ],
               ),
             ],
+            if (_completionBefore != null && _completionAfter != null) ...[
+              const SizedBox(height: 12),
+              _DawaQuestCompletionFeedback(
+                before: _completionBefore!,
+                after: _completionAfter!,
+                contentId: 'screening-checkpoint',
+                completedTitle: 'Checkpoint saved',
+                completedMessage:
+                    'Your answer is saved and your quest progress has been updated.',
+                alreadyCompletedMessage:
+                    'This checkpoint was already saved in your quest progress.',
+              ),
+            ],
             const SizedBox(height: 12),
             DawaPrimaryButton(
               label: 'Continue quest',
-              onPressed: _selected == 'B'
+              onPressed: _selected == 'B' &&
+                      !_savingCompletion &&
+                      (_completionAfter?.completedIds
+                              .contains('screening-checkpoint') ??
+                          false)
                   ? () => context.push('/learn/quests/completed')
                   : null,
             ),
           ],
         ),
       );
+}
+
+class _DawaQuestCompletionFeedback extends StatelessWidget {
+  const _DawaQuestCompletionFeedback({
+    required this.before,
+    required this.after,
+    required this.contentId,
+    required this.completedTitle,
+    required this.completedMessage,
+    required this.alreadyCompletedMessage,
+  });
+
+  final DawaLearningState before;
+  final DawaLearningState after;
+  final String contentId;
+  final String completedTitle;
+  final String completedMessage;
+  final String alreadyCompletedMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    final newlyCompleted = !before.completedIds.contains(contentId) &&
+        after.completedIds.contains(contentId);
+    final pointsChanged = after.coins > before.coins;
+    return Column(
+      key: ValueKey('quest-completion-$contentId-${after.coins}'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        DawaActionFeedback(
+          title: newlyCompleted ? completedTitle : 'Already completed',
+          message: newlyCompleted ? completedMessage : alreadyCompletedMessage,
+        ),
+        if (pointsChanged) ...[
+          const SizedBox(height: DawaSpacing.xs),
+          const Center(
+            child: DawaOptionalFeedbackAnimation(
+              asset: 'assets/lotties/Trophy.json',
+              semanticLabel: 'Quest checkpoint completed',
+              height: 76,
+            ),
+          ),
+        ],
+        if (pointsChanged) ...[
+          const SizedBox(height: DawaSpacing.xs),
+          DawaPointsFeedback(
+            previousPoints: before.coins,
+            currentPoints: after.coins,
+          ),
+        ],
+      ],
+    );
+  }
 }
 
 class _AnswerCard extends StatelessWidget {
@@ -914,11 +1060,15 @@ class _DawaQuestCompletePageState extends State<DawaQuestCompletePage> {
   Future<DawaLearningState> _complete() async {
     final state = await _repository.load();
     _wasAlreadyComplete = state.completedIds.contains('screening-without-fear');
-    return _repository.complete(
+    final completed = await _repository.complete(
       state,
       'screening-without-fear',
       rewardCoins: 20,
     );
+    if (!_wasAlreadyComplete && completed.coins > state.coins) {
+      unawaited(DawaFeedbackEffects.learningAwardConfirmed());
+    }
+    return completed;
   }
 
   @override
@@ -956,34 +1106,53 @@ class _DawaQuestCompletePageState extends State<DawaQuestCompletePage> {
             const SizedBox(height: 8),
             FutureBuilder<DawaLearningState>(
               future: _state,
-              builder: (context, snapshot) => DawaResponsiveGrid(
-                mobileColumns: 3,
-                tabletColumns: 3,
-                desktopColumns: 3,
-                spacing: 8,
-                children: [
-                  _AchievementCard(
-                    icon: Icons.monetization_on_rounded,
-                    color: DawaColors.gold,
-                    title: '+20 points',
-                    subtitle: _wasAlreadyComplete
-                        ? 'Already collected • ${snapshot.data?.coins ?? '…'} total'
-                        : '${snapshot.data?.coins ?? '…'} total',
-                  ),
-                  const _AchievementCard(
-                    icon: Icons.workspace_premium_rounded,
-                    color: DawaColors.green,
-                    title: 'Screening Champion',
-                    subtitle: 'Badge advanced',
-                  ),
-                  const _AchievementCard(
-                    icon: Icons.auto_stories_rounded,
-                    color: DawaColors.purple,
-                    title: 'Story unlocked',
-                    subtitle: 'At the Clinic',
-                  ),
-                ],
-              ),
+              builder: (context, snapshot) {
+                final newlyCompleted =
+                    snapshot.connectionState == ConnectionState.done &&
+                        !_wasAlreadyComplete;
+                return Column(
+                  children: [
+                    if (newlyCompleted)
+                      const DawaOptionalFeedbackAnimation(
+                        asset: 'assets/lotties/Champion.json',
+                        semanticLabel: 'Quest completed',
+                        height: 104,
+                      ),
+                    DawaResponsiveGrid(
+                      mobileColumns: 3,
+                      tabletColumns: 3,
+                      desktopColumns: 3,
+                      spacing: 8,
+                      children: [
+                        _AchievementCard(
+                          icon: Icons.monetization_on_rounded,
+                          color: DawaColors.gold,
+                          title: newlyCompleted ? '+20 points' : 'Points saved',
+                          subtitle: newlyCompleted
+                              ? '${snapshot.data?.coins ?? '…'} total'
+                              : '${snapshot.data?.coins ?? '…'} total • already collected',
+                        ),
+                        _AchievementCard(
+                          icon: Icons.workspace_premium_rounded,
+                          color: DawaColors.green,
+                          title: 'Screening Champion',
+                          subtitle: newlyCompleted
+                              ? 'Badge advanced'
+                              : 'Already unlocked',
+                        ),
+                        _AchievementCard(
+                          icon: Icons.auto_stories_rounded,
+                          color: DawaColors.purple,
+                          title: newlyCompleted
+                              ? 'Story unlocked'
+                              : 'Story available',
+                          subtitle: 'At the Clinic',
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 12),
             DawaCard(
@@ -1141,6 +1310,26 @@ Future<DawaLearningState?> showDawaRewardDialog(
   required DawaLearningRepository repository,
   required DawaLearningState state,
 }) {
+  // A completion flow can reach this helper directly. Keep Release 1 honest:
+  // points remain visible, but no voucher is advertised or claimable until the
+  // verified clinic-redemption service ships.
+  if (!DawaReleaseFeatures.voucherRedemptionEnabled) {
+    return showDialog<DawaLearningState>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rewards are being prepared'),
+        content: const Text(
+          'Your Dawa points are saved. Clinic reward claiming will appear here when it is available.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
   return showDialog<DawaLearningState>(
     context: context,
     barrierDismissible: false,
@@ -1181,6 +1370,9 @@ class _DawaRewardDialogState extends State<_DawaRewardDialog> {
       );
       if (mounted) {
         setState(() => _redemption = result);
+      }
+      if (!result.alreadyRedeemed) {
+        unawaited(DawaFeedbackEffects.rewardUnlocked());
       }
     } on DawaLearningException catch (error) {
       if (mounted) setState(() => _error = error.message);
@@ -1239,7 +1431,10 @@ class _DawaRewardDialogState extends State<_DawaRewardDialog> {
                   const SizedBox(height: 12),
                   TweenAnimationBuilder<double>(
                     tween: Tween(begin: .84, end: 1),
-                    duration: const Duration(milliseconds: 420),
+                    duration: DawaMotion.resolve(
+                      context,
+                      DawaMotion.celebration,
+                    ),
                     curve: Curves.easeOutBack,
                     builder: (context, value, child) =>
                         Transform.scale(scale: value, child: child),
@@ -1279,7 +1474,7 @@ class _DawaRewardDialogState extends State<_DawaRewardDialog> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text('Free scan voucher',
+                                    Text('Clinic scan voucher',
                                         style: context.dawaSectionTitle),
                                     const Text(
                                       '1000 points',
@@ -1299,11 +1494,11 @@ class _DawaRewardDialogState extends State<_DawaRewardDialog> {
                           )
                         : Semantics(
                             label:
-                                'Free scan voucher code ${_redemption!.voucherCode}',
+                                'Clinic scan voucher reference ${_redemption!.claimReference ?? _redemption!.voucherCode}',
                             child: Column(
                               children: [
                                 Text(
-                                  'FREE SCAN VOUCHER',
+                                  'CLINIC SCAN VOUCHER',
                                   style: context.dawaCaption.copyWith(
                                     color: DawaColors.green,
                                     fontWeight: FontWeight.w600,
@@ -1312,7 +1507,8 @@ class _DawaRewardDialogState extends State<_DawaRewardDialog> {
                                 const SizedBox(height: 6),
                                 SelectionArea(
                                   child: Text(
-                                    _redemption!.voucherCode,
+                                    _redemption!.claimReference ??
+                                        _redemption!.voucherCode,
                                     textAlign: TextAlign.center,
                                     style: context.dawaTitle.copyWith(
                                       color: DawaColors.green,
@@ -1321,11 +1517,27 @@ class _DawaRewardDialogState extends State<_DawaRewardDialog> {
                                   ),
                                 ),
                                 const SizedBox(height: 7),
+                                if (_redemption!.qrPayload != null &&
+                                    _redemption!.qrPayload!.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 7),
+                                    child: QrImageView(
+                                      data: _redemption!.qrPayload!,
+                                      size: 124,
+                                      eyeStyle: const QrEyeStyle(
+                                        color: DawaColors.primary,
+                                      ),
+                                      dataModuleStyle: const QrDataModuleStyle(
+                                        color: DawaColors.ink,
+                                      ),
+                                    ),
+                                  ),
                                 TextButton.icon(
                                   onPressed: () async {
                                     await Clipboard.setData(
                                       ClipboardData(
-                                        text: _redemption!.voucherCode,
+                                        text: _redemption!.claimReference ??
+                                            _redemption!.voucherCode,
                                       ),
                                     );
                                     if (context.mounted) {
