@@ -15,6 +15,7 @@ import '/features/preferences/dawa_language_sheet.dart';
 import '/features/preferences/dawa_user_preferences_repository.dart';
 import '/features/profile/data/health_profile_repository.dart';
 import '/features/profile/profile_completion_page.dart';
+import '/features/terms/dawa_terms_page.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/navbar/edit_profile/edit_profile_widget.dart';
 
@@ -632,6 +633,15 @@ class _DawaMomSettingsPageState extends State<DawaMomSettingsPage> {
                             icon: Icons.help_outline_rounded,
                             title: 'Help & support',
                             onTap: _showSupport,
+                          ),
+                          _DawaSettingsRow(
+                            icon: Icons.description_outlined,
+                            title: 'Terms and conditions',
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const DawaTermsPage.view(),
+                              ),
+                            ),
                           ),
                           _DawaSettingsRow(
                             icon: Icons.info_outline_rounded,

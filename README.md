@@ -21,9 +21,10 @@ DawaMom is the patient-facing Flutter app from [Dawa Health](https://dawa-health
 11. [Project documentation](#project-documentation)
 12. [Clinical safety](#clinical-safety)
 13. [Data protection](#data-protection)
-14. [Troubleshooting](#troubleshooting)
-15. [Contributing](#contributing)
-16. [License](#license)
+14. [Model training data (opt-in)](#model-training-data-opt-in)
+15. [Troubleshooting](#troubleshooting)
+16. [Contributing](#contributing)
+17. [License](#license)
 
 ## What it does
 
@@ -34,7 +35,8 @@ DawaMom is the patient-facing Flutter app from [Dawa Health](https://dawa-health
 - **Mobile Money payments.** Paid services are paid through Lipila. See [Payments](#6-payments-the-app-cannot-fake) for how this is protected.
 - **Learning.** Lessons, quests, myth-or-fact cards, audio lessons and health games, with points for progress.
 - **Notifications.** In-app notifications and notification preferences.
-- **Profile and preferences.** Health profile, language, reduced animations, a guided tour of the app, and account deletion.
+- **Terms and consent.** After the splash screen, a mother must agree to the terms and conditions before using the app. She can also opt in, if she wants, to letting Dawa Health use her data to train its AI. See [Model training data (opt-in)](#model-training-data-opt-in).
+- **Profile and preferences.** Health profile, language, reduced animations, the AI-training opt-in, a guided tour of the app, and account deletion.
 - **Languages.** The app itself is available in English, Nyanja, Bemba, Tonga and Lozi. Rudo also understands and answers in Shona and Ndebele. Voice input works in English, Shona, Bemba and Nyanja.
 
 Some features are switched off by default until their back end is approved for release (Care Plan and voucher redemption). See [Releases are gated](#7-releases-are-gated-by-build-flags-and-migration-checks).
@@ -246,7 +248,7 @@ Payment, email and Dawa Clinician sync secrets (`LIPILA_*`, `RESEND_API_KEY`, `D
 
 | Path | Contents |
 | --- | --- |
-| `lib/features/` | Features organised by layer: appointments, pregnancy, period tracker, learning, games, rewards, notifications, payments, care plan, services, profile, preferences, onboarding, Rudo |
+| `lib/features/` | Features organised by layer: appointments, pregnancy, period tracker, learning, games, rewards, notifications, payments, care plan, services, profile, preferences, onboarding, terms and consent, Rudo |
 | `lib/navbar/`, `lib/auth/` | The original FlutterFlow-era pages: home (including Rudo chat), appointments, encounters, profile, sign-in and registration |
 | `lib/design_system/`, `lib/components/` | Shared design tokens, components, page scaffold and reusable widgets |
 | `lib/services/` | Voice recording, speech-to-text upload and spoken replies |
@@ -331,9 +333,72 @@ DawaMom handles mothers' identities, health profiles, pregnancy and cycle data, 
 - Chat messages are stored in Supabase. For health questions in other languages, the English versions are stored with the reply so later questions have context.
 - Rudo sends message text to the language, translation and model providers that are configured (Mansa, Gemini, the MedGemma Space). Voice notes are sent to the voice endpoint for transcription. Say this in your privacy notice.
 - Edge Function logs never contain message or transcript text, only ids, lengths, routes and timings. Keep it that way.
+- A mother's data may be used to train models only if she has opted in. See [Model training data (opt-in)](#model-training-data-opt-in).
 - Decide how long chat history and voice data are kept, and delete them on a schedule that fits your policy.
 - Follow the data protection laws that apply where you operate.
 - Never commit patient data, exported records, recordings, screenshots of real patients or local key files.
+
+## Model training data (opt-in)
+
+Dawa Health may use a mother's data to train and improve its AI models **only if she opts in**. The choice is off by default, is never needed to use the app, and can be changed at any time.
+
+### How she chooses
+
+- **On the terms screen** after the splash: an optional checkbox, "Opt in: help train our AI (optional)", below the required terms checkbox. It starts unticked. Leaving it unticked records "no".
+- **In Settings > App preferences > Your data:** a switch with the same wording, to opt in or out later.
+
+The wording is in `lib/features/terms/dawa_terms.dart` (`modelTrainingOptInTitle`, `modelTrainingOptInDescription`, and section 9 of the terms). When it changes, raise `DawaTerms.modelTrainingVersion` so you know which wording each choice answered.
+
+### Where the choice is recorded
+
+| Where | Keys | When it is written |
+| --- | --- | --- |
+| The signed-in account: Supabase auth user metadata (`auth.users.raw_user_meta_data`) | `model_training_opt_in` (true or false), `model_training_opt_in_at` (ISO time, UTC), `model_training_consent_version` (the wording version) | When she changes the switch while signed in, and at every sign-in |
+| The device (shared preferences) | `dawa_model_training_opt_in`, `dawa_model_training_opt_in_at`, `dawa_model_training_consent_version` | As soon as she chooses, including on the terms screen before sign-in |
+
+**The account record is the one the training pipeline must use.** At each sign-in, the device and account choices are compared and the more recent one wins on both sides (`DawaModelTrainingConsent.syncWithAccount`). So a choice made on the terms screen before sign-in reaches her account when she signs in. No database migration is needed. A mother can change only her own record.
+
+### Which data the opt-in covers
+
+| Data | Where it is stored | Use for training if she opted in |
+| --- | --- | --- |
+| Rudo conversations | `public.chat_messages.content`. For health questions in other languages, the English versions are in `payload.english_question` and `payload.english_answer`. Linked to her account through `chat_sessions.profile_id` | Yes, after removing names and contact details typed in messages |
+| Pregnancy and health profile | `public.mothers` (for example `pregnancy_status`), by `profile_id`, and `public.first_encounters`, by `mother_id` | Yes, without identifying fields |
+| Cycle tracking | `public.period_tracker_settings` and `public.period_tracker_entries`, by `profile_id` | Yes |
+| Names, phone numbers, addresses, dates of birth, email addresses, and `chat_sessions.phone_number` / `user_name` | `mothers`, `profiles`, `chat_sessions`, auth | **No.** The terms promise these are removed before training. Use age bands instead of dates of birth if age is needed |
+| Payments, appointments, notifications | Their own tables | **No.** Not covered by the opt-in |
+| Voice recordings | Not stored. Only the text she confirms is saved, as a chat message | Not available |
+
+### Building a training dataset
+
+Run this on a server with the service role, never in the app. Select the accounts whose **current** choice is to opt in, each time you build a dataset:
+
+```sql
+-- Accounts that are currently opted in
+select u.id as profile_id,
+       u.raw_user_meta_data->>'model_training_opt_in_at' as chosen_at,
+       (u.raw_user_meta_data->>'model_training_consent_version')::int as wording_version
+from auth.users u
+where (u.raw_user_meta_data->>'model_training_opt_in')::boolean is true;
+
+-- Their Rudo messages, without session contact fields
+select m.created_at, m.role, m.content,
+       m.payload->>'english_question' as english_question,
+       m.payload->>'english_answer' as english_answer
+from public.chat_messages m
+join public.chat_sessions s on s.id = m.session_id
+join auth.users u on u.id = s.profile_id
+where (u.raw_user_meta_data->>'model_training_opt_in')::boolean is true
+order by s.id, m.created_at;
+```
+
+Rules for the pipeline:
+
+- Check the opt-in every time you build a dataset. Never reuse an old list of opted-in accounts.
+- Remove names, phone numbers, addresses, email addresses and other contact details, including any she typed into a message, before data leaves the database.
+- When she opts out, leave her data out of every new dataset. Data already used to train a model cannot always be removed from it, and the terms say so.
+- When an account is deleted (`delete_current_user`), its profile, chat sessions and messages are deleted with it.
+- Keep a record of which accounts went into each dataset, so you can answer questions about it later.
 
 ## Troubleshooting
 
