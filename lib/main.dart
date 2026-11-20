@@ -16,6 +16,9 @@ import '/features/onboarding/dawa_main_app_tour.dart';
 import '/features/settings/dawa_mom_settings_page.dart';
 import '/features/period_tracker/presentation/dawa_cycle_tracker_page.dart';
 import '/features/appointments/presentation/dawa_care_page.dart';
+import '/features/terms/dawa_model_training_consent.dart';
+import '/features/terms/dawa_terms_consent.dart';
+import '/features/terms/dawa_terms_page.dart';
 import '/design_system/dawa_design_tokens.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/navbar/home/home_widget.dart' show AIChatModal;
@@ -47,6 +50,7 @@ class _Bootstrap extends StatefulWidget {
 
 class _BootstrapState extends State<_Bootstrap> {
   late final Future<FFAppState> _initFuture;
+  late DawaTermsConsent _termsConsent;
 
   @override
   void initState() {
@@ -58,6 +62,9 @@ class _BootstrapState extends State<_Bootstrap> {
     await initSupabase();
     await FlutterFlowTheme.initialize();
     await DawaLocaleController.instance.initialize();
+    // Read while the splash plays, so MyApp knows straight away whether to
+    // show the terms after it.
+    _termsConsent = await DawaTermsConsent.load();
 
     final appState = FFAppState();
     await appState.initializePersistedState();
@@ -84,7 +91,7 @@ class _BootstrapState extends State<_Bootstrap> {
         }
         return ChangeNotifierProvider(
           create: (context) => snapshot.data!,
-          child: MyApp(),
+          child: MyApp(termsConsent: _termsConsent),
         );
       },
     );
@@ -93,6 +100,11 @@ class _BootstrapState extends State<_Bootstrap> {
 
 class MyApp extends StatefulWidget {
   // This widget is the root of your application.
+  MyApp({super.key, required this.termsConsent});
+
+  /// Whether this device has accepted the current terms and conditions.
+  final DawaTermsConsent termsConsent;
+
   @override
   State<MyApp> createState() => _MyAppState();
 
@@ -112,6 +124,12 @@ class _MyAppState extends State<MyApp> {
   static const bool _skipSplash =
       bool.fromEnvironment('SKIP_SPLASH', defaultValue: false);
   bool _showSplash = !_skipSplash;
+  // After the splash, the terms are shown until the current version has been
+  // accepted on this device. Once accepted, the app opens straight away.
+  late bool _showTerms = !widget.termsConsent.hasAcceptedCurrentTerms;
+  // The optional opt-in to model training, chosen on the terms screen and
+  // changeable in Settings > App preferences.
+  final _modelTraining = DawaModelTrainingConsent();
 
   late AppStateNotifier _appStateNotifier;
   late GoRouter _router;
@@ -160,6 +178,10 @@ class _MyAppState extends State<MyApp> {
         _authFallbackTimer?.cancel();
         if (!user.loggedIn) {
           FFAppState().motherRef = null;
+        } else {
+          // Copies a training opt-in made before sign-in to the account, or
+          // the account's newer choice to this device.
+          unawaited(_modelTraining.syncWithAccount());
         }
         _appStateNotifier.update(user);
       },
@@ -195,6 +217,15 @@ class _MyAppState extends State<MyApp> {
     if (mounted) setState(() {});
   }
 
+  Future<void> _acceptTerms(bool modelTrainingOptIn) async {
+    await widget.termsConsent.accept();
+    await _modelTraining.setChoice(modelTrainingOptIn, saveToAccount: false);
+    if (mounted) setState(() => _showTerms = false);
+    // If already signed in, copy the choice to the account in the background
+    // so a slow connection never holds up opening the app.
+    unawaited(_modelTraining.syncWithAccount());
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
@@ -217,21 +248,27 @@ class _MyAppState extends State<MyApp> {
       ),
       themeMode: ThemeMode.light,
       routerConfig: _router,
-      // Show DawaSplashScreen first, then the actual app
+      // Show DawaSplashScreen first, then the terms (until accepted on this
+      // device), then the actual app. Both are drawn instead of the router, so
+      // no page of the app can be reached until they are done.
       builder: (context, child) {
-        return _showSplash
-            ? DawaSplashScreen(
-                onAnimationComplete: () {
-                  if (mounted) {
-                    setState(() {
-                      _showSplash = false;
-                    });
-                    // Notify app state that splash is complete
-                    _appStateNotifier.stopShowingSplashImage();
-                  }
-                },
-              )
-            : (child ?? Container());
+        if (_showSplash) {
+          return DawaSplashScreen(
+            onAnimationComplete: () {
+              if (mounted) {
+                setState(() {
+                  _showSplash = false;
+                });
+                // Notify app state that splash is complete
+                _appStateNotifier.stopShowingSplashImage();
+              }
+            },
+          );
+        }
+        if (_showTerms) {
+          return DawaTermsPage.agreement(onAgree: _acceptTerms);
+        }
+        return child ?? Container();
       },
     );
   }

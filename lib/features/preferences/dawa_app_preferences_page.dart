@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart' as material;
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
@@ -5,20 +6,30 @@ import '/design_system/dawa_components.dart';
 import '/design_system/dawa_design_tokens.dart';
 import '/design_system/dawa_page_scaffold.dart';
 import '/localization/dawa_localized_material.dart';
+import '/features/terms/dawa_model_training_consent.dart';
+import '/features/terms/dawa_terms.dart';
 
 import 'dawa_user_preferences_repository.dart';
 
-/// Controls optional, non-clinical feedback used across DawaMom.
+/// Controls optional, non-clinical feedback used across DawaMom, and the
+/// optional opt-in to model training.
 ///
-/// These settings are stored on the device. They do not need health data or a
-/// network connection, so a user can change them even while offline.
+/// The feedback settings are stored on the device. They do not need health
+/// data or a network connection, so a user can change them even while
+/// offline. The model-training choice is also saved on the account when
+/// signed in (see dawa_model_training_consent.dart).
 class DawaAppPreferencesPage extends StatefulWidget {
-  const DawaAppPreferencesPage({super.key, this.repository});
+  const DawaAppPreferencesPage({
+    super.key,
+    this.repository,
+    this.modelTraining,
+  });
 
   static const routeName = 'AppPreferences';
   static const routePath = '/app-preferences';
 
   final DawaUserPreferencesRepository? repository;
+  final DawaModelTrainingConsent? modelTraining;
 
   @override
   State<DawaAppPreferencesPage> createState() => _DawaAppPreferencesPageState();
@@ -195,6 +206,18 @@ class _DawaAppPreferencesPageState extends State<DawaAppPreferencesPage> {
             const SizedBox(height: DawaSpacing.sm),
             const LinearProgressIndicator(),
           ],
+          const SizedBox(height: DawaSpacing.md),
+          const DawaSectionHeader(
+            title: 'Your data',
+            subtitle: 'Choose how Dawa Health may use your information.',
+          ),
+          const SizedBox(height: DawaSpacing.xs),
+          DawaCard(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: _ModelTrainingPreference(
+              consent: widget.modelTraining ?? DawaModelTrainingConsent(),
+            ),
+          ),
           if (_error != null) ...[
             const SizedBox(height: DawaSpacing.sm),
             Semantics(
@@ -240,4 +263,87 @@ class _AppPreferenceSwitch extends StatelessWidget {
           if (showDivider) const Divider(height: 1),
         ],
       );
+}
+
+/// The optional opt-in to model training. Off unless she turns it on.
+class _ModelTrainingPreference extends StatefulWidget {
+  const _ModelTrainingPreference({required this.consent});
+
+  final DawaModelTrainingConsent consent;
+
+  @override
+  State<_ModelTrainingPreference> createState() =>
+      _ModelTrainingPreferenceState();
+}
+
+class _ModelTrainingPreferenceState extends State<_ModelTrainingPreference> {
+  bool? _optedIn;
+  bool _saving = false;
+  String? _notice;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.consent.isOptedIn().then((value) {
+      if (mounted) setState(() => _optedIn = value);
+    });
+  }
+
+  Future<void> _change(bool optedIn) async {
+    setState(() {
+      _saving = true;
+      _optedIn = optedIn;
+      _notice = null;
+    });
+    final savedToAccount = await widget.consent.setChoice(optedIn);
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      _notice = savedToAccount
+          ? null
+          : 'Saved on this device. Your account will be updated the next '
+              'time you sign in.';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final optedIn = _optedIn;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // material.Text: consent wording is shown exactly as written, the
+        // same as on the terms screen.
+        SwitchListTile(
+          key: const ValueKey('model-training-opt-in-switch'),
+          secondary: const Icon(
+            Icons.model_training_rounded,
+            color: DawaColors.primary,
+          ),
+          title: material.Text(
+            DawaTerms.modelTrainingOptInTitle,
+            style: context.dawaSectionTitle,
+          ),
+          subtitle: material.Text(
+            DawaTerms.modelTrainingOptInDescription,
+            style: context.dawaCaption,
+          ),
+          isThreeLine: true,
+          value: optedIn ?? false,
+          activeTrackColor: DawaColors.primary,
+          onChanged: optedIn == null || _saving ? null : _change,
+        ),
+        if (_notice != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              DawaSpacing.md,
+              0,
+              DawaSpacing.md,
+              DawaSpacing.sm,
+            ),
+            child: Text(_notice!, style: context.dawaCaption),
+          ),
+      ],
+    );
+  }
 }
